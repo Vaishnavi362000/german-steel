@@ -1,0 +1,76 @@
+{
+  "expo": {
+    "name": "Field Sales",
+    "slug": "fieldsales",
+    "version": "1.0.2",
+    "orientation": "portrait",
+    "icon": "./assets/Login.jpg",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/Login.jpg",
+      "resizeMode": "contain",
+      "backgroundColor": "#F3F4F6"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "fetch"
+        ],
+        "NSLocationWhenInUseUsageDescription": "This app requires location access for tracking field sales activities."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/Login.jpg",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.guptapayal.Icon",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "dbe23be5-5d2f-4275-87cf-9c0ef071187a"
+      }
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-file-system",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location while using the app."
+        }
+      ]
+    ],
+    "newArchEnabled": false,
+    "owner": "gajkesari",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/056dd2a3-33ca-4755-9e58-381f76de7c60",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    }
+  }
+}
