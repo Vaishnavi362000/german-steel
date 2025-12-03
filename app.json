@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "ICON",
-    "slug": "icon",
+    "name": "Field Sales",
+    "slug": "fieldsales",
     "version": "1.0.2",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/Login.jpg",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/Login.jpg",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#F3F4F6"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -25,7 +25,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/Login.jpg",
         "backgroundColor": "#ffffff"
       },
       "package": "com.guptapayal.Icon",
@@ -42,7 +42,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "e3cfc3a5-a756-485d-8f59-2b2da6b8c7ae"
+        "projectId": "dbe23be5-5d2f-4275-87cf-9c0ef071187a"
       }
     },
     "plugins": [
@@ -64,7 +64,7 @@
       ]
     ],
     "newArchEnabled": false,
-    "owner": "iconsales",
+    "owner": "gajkesari",
     "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/056dd2a3-33ca-4755-9e58-381f76de7c60",

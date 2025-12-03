@@ -1,11 +1,11 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import { getPendingCustomers, removePendingCustomer } from '../utils/offlineStorage';
 import NetInfo from '@react-native-community/netinfo';
 import { useNavigation } from '@react-navigation/native';
-import axios from 'axios';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { getPendingCustomers, removePendingCustomer } from '../utils/offlineStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const PendingCustomers = ({ authToken, onCustomerCreated }) => {
   const [pendingCustomers, setPendingCustomers] = useState([]);
@@ -42,7 +42,7 @@ const PendingCustomers = ({ authToken, onCustomerCreated }) => {
       // First check if customer exists
       try {
         const checkResponse = await axios.get(
-          `https://unbalkingly-uncharged-elizabet.ngrok-free.dev/store/getByPhone?phone=${customer.primaryContact}`,
+          `https://api.gajkesaristeels.in/store/getByPhone?phone=${customer.primaryContact}`,
           {
             headers: { Authorization: `Bearer ${authToken}` },
           }
@@ -79,7 +79,7 @@ const PendingCustomers = ({ authToken, onCustomerCreated }) => {
       console.log('Creating customer with payload:', createPayload); // Debug log
 
       const createResponse = await axios.post(
-        'https://unbalkingly-uncharged-elizabet.ngrok-free.dev/store/create',
+        'https://api.gajkesaristeels.in/store/create',
         createPayload,
         {
           headers: {

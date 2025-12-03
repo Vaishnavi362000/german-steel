@@ -1,6 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Collapsible from 'react-native-collapsible';
 
 const RecentVisits = ({ visits, onVisitPress }) => {
@@ -24,7 +24,7 @@ const RecentVisits = ({ visits, onVisitPress }) => {
             <TouchableOpacity
               key={visit.id}
               style={styles.item}
-              onPress={() => onVisitPress(visit)}
+              onPress={() => onVisitPress(visit.id)}
             >
               <Text style={styles.storeName}>{visit.storeName}</Text>
               <Text style={styles.date}>{visit.visit_date}</Text>

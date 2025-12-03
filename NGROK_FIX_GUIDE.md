@@ -31,7 +31,7 @@ We've created a centralized API service at `services/api.js` that automatically 
 import axios from 'axios';
 
 const response = await axios.get(
-  'https://unbalkingly-uncharged-elizabet.ngrok-free.dev/employee/me',
+  'https://api.gajkesaristeels.in/employee/me',
   {
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -109,7 +109,7 @@ If you prefer to manually add headers to existing axios calls:
 
 ```javascript
 const response = await axios.get(
-  'https://unbalkingly-uncharged-elizabet.ngrok-free.dev/employee/me',
+  'https://api.gajkesaristeels.in/employee/me',
   {
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -161,7 +161,7 @@ const createAxiosInstance = async () => {
   const token = await AsyncStorage.getItem('userToken');
   
   return axios.create({
-    baseURL: 'https://unbalkingly-uncharged-elizabet.ngrok-free.dev',
+    baseURL: 'https://api.gajkesaristeels.in',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',

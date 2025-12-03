@@ -1,38 +1,38 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import * as Location from 'expo-location';
-import * as Updates from 'expo-updates';
-import React, { useEffect, useState } from 'react';
 import { Alert } from 'react-native';
+import * as Updates from 'expo-updates';
+import * as Location from 'expo-location';
 
 // Import your screens
-import AddComplaintScreen from './screens/AddComplaintScreen';
-import AddRequirementScreen from './screens/AddRequirementScreen';
-import AttendanceScreen from './screens/AttendanceScreen';
-import CameraScreen from './screens/CameraScreen';
-import ComplaintsScreen from './screens/ComplaintsScreen';
-import CustomerDetails from './screens/CustomerDetails';
-import CustomerListScreen from './screens/CustomerListScreen';
-import CustomTabBar from './screens/CustomTabBar';
-import DashboardScreen from './screens/DashboardScreen';
-import ExpenseScreen from './screens/ExpenseScreen';
-import HomeLocationScreen from './screens/HomeLocationScreen';
-import HomeScreen from './screens/HomeScreen';
-import LocationService from './screens/LocationService';
-import LoginScreen from './screens/LoginScreen';
-import Notifications1 from './screens/Notifications1';
-import PricingScreen from './screens/PricingScreen';
-import RequirementsScreen from './screens/RequirementsScreen';
-import StoreSelectionScreen from './screens/StoreSelectionScreen';
-import TaskDetailsScreen from './screens/TaskDetailsScreen';
-import UpdateRequiredScreen from './screens/UpdateRequiredScreen';
-import UserProfile from './screens/UserProfile';
-import VisitScreen from './screens/VisitScreen';
-import VisitsList from './screens/VisitsList';
-import VisitsTimeline from './screens/VisitsTimeline';
+import LoginScreen from './LoginScreen';
+import HomeScreen from './HomeScreen';
+import CustomerListScreen from './CustomerListScreen';
+import CustomerDetails from './CustomerDetails';
+import VisitsList from './VisitsList';
+import VisitScreen from './VisitScreen';
+import VisitsTimeline from './VisitsTimeline';
+import UserProfile from './UserProfile';
+import ExpenseScreen from './ExpenseScreen';
+import AttendanceScreen from './AttendanceScreen';
+import CameraScreen from './CameraScreen';
+import CustomTabBar from './CustomTabBar';
+import Notifications1 from './Notifications1';
+import RequirementsScreen from './RequirementsScreen';
+import ComplaintsScreen from './ComplaintsScreen';
+import PricingScreen from './PricingScreen';
+import TaskDetailsScreen from './TaskDetailsScreen';
+import UpdateRequiredScreen from './UpdateRequiredScreen';
+import HomeLocationScreen from './HomeLocationScreen';
+import StoreSelectionScreen from './StoreSelectionScreen';
+import AddComplaintScreen from './AddComplaintScreen';
+import AddRequirementScreen from './AddRequirementScreen';
+import LocationService from './LocationService';
+import YesterdayStatsScreen from './YesterdayStatsScreen';
 
 const Tab = createBottomTabNavigator();
 const HomeStack = createStackNavigator();
@@ -96,8 +96,8 @@ function HomeStackScreen({ authToken, handleLogout }) {
       <HomeStack.Screen name="AddRequirementScreen">
         {(props) => <AddRequirementScreen {...props} authToken={authToken} />}
       </HomeStack.Screen>
-      <HomeStack.Screen name="DashboardScreen">
-        {(props) => <DashboardScreen {...props} authToken={authToken} />}
+      <HomeStack.Screen name="YesterdayStatsScreen">
+        {(props) => <YesterdayStatsScreen {...props} authToken={authToken} />}
       </HomeStack.Screen>
     </HomeStack.Navigator>
   );
@@ -148,21 +148,18 @@ const App = () => {
 
   useEffect(() => {
     async function updateApp() {
-      // Only check for updates in production builds, not in Expo Go
-      if (!__DEV__ && Updates.isEnabled) {
-        try {
-          const { isAvailable } = await Updates.checkForUpdateAsync();
-          if (isAvailable) {
-            await Updates.fetchUpdateAsync();
-            Alert.alert(
-              'Update Available',
-              'A new update is available. The app will reload to apply the update.',
-              [{ text: 'OK', onPress: () => Updates.reloadAsync() }]
-            );
-          }
-        } catch (e) {
-          console.error('Error fetching updates', e);
+      try {
+        const { isAvailable } = await Updates.checkForUpdateAsync();
+        if (isAvailable) {
+          await Updates.fetchUpdateAsync();
+          Alert.alert(
+            'Update Available',
+            'A new update is available. The app will reload to apply the update.',
+            [{ text: 'OK', onPress: () => Updates.reloadAsync() }]
+          );
         }
+      } catch (e) {
+        console.error('Error fetching updates', e);
       }
     }
     updateApp();
@@ -173,37 +170,23 @@ const App = () => {
       try {
         const token = await AsyncStorage.getItem('userToken');
         if (token) {
-          // Use /employee/me endpoint to verify token and get current employee data
           const response = await axios.get(
-            'https://unbalkingly-uncharged-elizabet.ngrok-free.dev/employee/me',
+            'https://api.gajkesaristeels.in/employee/getById?id=1',
             {
               headers: {
                 Authorization: `Bearer ${token}`,
-                // Bypass ngrok browser warning page
-                'ngrok-skip-browser-warning': 'true',
-                'User-Agent': 'IconMobile',
               },
             }
           );
 
-          if (response.status === 200 && response.data) {
+          if (response.status === 200) {
             setAuthToken(token);
-            // Store employee ID if not already stored
-            if (response.data.employeeId) {
-              await AsyncStorage.setItem('employeeId', String(response.data.employeeId));
-            }
           } else {
             await AsyncStorage.removeItem('userToken');
-            await AsyncStorage.removeItem('employeeId');
           }
         }
       } catch (e) {
         console.error('Failed to verify the token', e);
-        // If token verification fails, clear stored credentials
-        if (e.response && (e.response.status === 401 || e.response.status === 403 || e.response.status === 404)) {
-          await AsyncStorage.removeItem('userToken');
-          await AsyncStorage.removeItem('employeeId');
-        }
       }
       setIsInitializing(false);
     };
@@ -215,7 +198,7 @@ const App = () => {
     setEmployeeId(empId);
 
     await AsyncStorage.setItem('userToken', token);
-    await AsyncStorage.setItem('employeeId', empId.toString());
+    await AsyncStorage.setItem('employeeId', empId);
 
     try {
       // Get initial location
@@ -233,8 +216,6 @@ const App = () => {
     try {
       await AsyncStorage.removeItem('userToken');
       await AsyncStorage.removeItem('employeeId');
-      await AsyncStorage.removeItem('employeeFirstName');
-      await AsyncStorage.removeItem('employeeRole');
       setAuthToken(null);
       setEmployeeId(null);
     } catch (error) {
@@ -282,4 +263,3 @@ const App = () => {
 };
 
 export default App;
-

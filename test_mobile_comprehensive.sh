@@ -3,7 +3,7 @@
 # Comprehensive Mobile App RBAC Testing
 # Simulates real Field Officer and Regional Manager workflows
 
-BASE_URL="https://unbalkingly-uncharged-elizabet.ngrok-free.dev"
+BASE_URL="https://api.gajkesaristeels.in"
 REPORT="MOBILE_APP_TEST_RESULTS.md"
 
 echo "📱 COMPREHENSIVE MOBILE APP RBAC TESTING"

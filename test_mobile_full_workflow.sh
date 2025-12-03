@@ -3,7 +3,7 @@
 # Complete Mobile App Workflow Testing
 # Real-world scenarios: Create customers → Verify visibility → Create visits → Check dashboard
 
-BASE_URL="https://unbalkingly-uncharged-elizabet.ngrok-free.dev"
+BASE_URL="https://api.gajkesaristeels.in"
 
 echo "📱 MOBILE APP - COMPLETE WORKFLOW TESTING"
 echo "=========================================="

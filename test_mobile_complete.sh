@@ -3,7 +3,7 @@
 # Complete Mobile App Testing with Real-World Payloads
 # Includes GPS coordinates, proper client types, and visit workflows
 
-BASE_URL="https://unbalkingly-uncharged-elizabet.ngrok-free.dev"
+BASE_URL="https://api.gajkesaristeels.in"
 REPORT="MOBILE_COMPLETE_TEST_REPORT.md"
 
 echo "📱 COMPLETE MOBILE APP RBAC TESTING"
