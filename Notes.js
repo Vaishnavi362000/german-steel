@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
@@ -7,6 +7,7 @@ import moment from 'moment';
 const Notes = ({ visitId, storeId, authToken, readOnly, onNotesUpdated = () => { } }) => { // Set default prop value
   const [notes, setNotes] = useState([]);
   const [newNote, setNewNote] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     fetchNotes();
@@ -27,12 +28,17 @@ const Notes = ({ visitId, storeId, authToken, readOnly, onNotesUpdated = () => {
   };
 
   const handleAddNote = async () => {
+    if (isAdding) {
+      return;
+    }
+
     if (newNote.trim() === '') {
       Alert.alert('Error', 'Note content cannot be empty.');
       return;
     }
 
     try {
+      setIsAdding(true);
       const employeeId = await AsyncStorage.getItem('employeeId');
       const response = await axios.post(
         'https://api.gajkesaristeels.in/notes/create',
@@ -65,6 +71,8 @@ const Notes = ({ visitId, storeId, authToken, readOnly, onNotesUpdated = () => {
     } catch (error) {
       console.error('Error adding note:', error);
       Alert.alert('Error', 'Failed to add note. Please try again.');
+    } finally {
+      setIsAdding(false);
     }
   };
 
@@ -87,8 +95,16 @@ const Notes = ({ visitId, storeId, authToken, readOnly, onNotesUpdated = () => {
             onChangeText={setNewNote}
             multiline
           />
-          <TouchableOpacity style={styles.button} onPress={handleAddNote}>
-            <Text style={styles.buttonText}>Add Note</Text>
+          <TouchableOpacity
+            style={[styles.button, isAdding && styles.buttonDisabled]}
+            onPress={handleAddNote}
+            disabled={isAdding}
+          >
+            {isAdding ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Add Note</Text>
+            )}
           </TouchableOpacity>
         </>
       )}

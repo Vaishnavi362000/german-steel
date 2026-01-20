@@ -20,7 +20,8 @@
         "UIBackgroundModes": [
           "fetch"
         ],
-        "NSLocationWhenInUseUsageDescription": "This app requires location access for tracking field sales activities."
+        "NSLocationWhenInUseUsageDescription": "This app requires location access for tracking field sales activities.",
+        "NSCameraUsageDescription": "This app requires camera access to capture check-in images."
       }
     },
     "android": {
@@ -60,6 +61,12 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location while using the app."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to capture check-in images."
         }
       ]
     ],

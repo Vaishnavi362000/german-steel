@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
 
 const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, onClose, clientType }) => {
     const [monthlySale, setMonthlySale] = useState(initialMonthlySale?.toString() || '');
     const requirementsClientTypes = ['site visit', 'engineer', 'architect', 'builder'];
     const isRequirementsType = requirementsClientTypes.includes(clientType);
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
         if (initialMonthlySale) {
@@ -32,12 +33,17 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
     };
 
     const updateMonthlySale = async () => {
+        if (isSaving) {
+            return;
+        }
+
         if (monthlySale.trim() === '') {
             Alert.alert('Error', isRequirementsType ? 'Requirements cannot be empty.' : 'Monthly sale cannot be empty.');
             return;
         }
 
         try {
+            setIsSaving(true);
             await axios.put(`https://api.gajkesaristeels.in/visit/editMonthlySale?visitId=${visitId}&monthlySale=${monthlySale}`, null, {
                 headers: {
                     Authorization: `Bearer ${authToken}`,
@@ -48,6 +54,8 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
         } catch (error) {
             console.error('Error updating monthly sale:', error);
             Alert.alert('Error', isRequirementsType ? 'Failed to update requirements. Please try again.' : 'Failed to update monthly sale. Please try again.');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -66,8 +74,16 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
                 value={monthlySale}
                 onChangeText={handleMonthlySaleChange}
             />
-            <TouchableOpacity style={styles.button} onPress={updateMonthlySale}>
-                <Text style={styles.buttonText}>Save</Text>
+            <TouchableOpacity
+                style={[styles.button, isSaving && styles.buttonDisabled]}
+                onPress={updateMonthlySale}
+                disabled={isSaving}
+            >
+                {isSaving ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                    <Text style={styles.buttonText}>Save</Text>
+                )}
             </TouchableOpacity>
         </View>
     );
@@ -95,6 +111,9 @@ const styles = StyleSheet.create({
         padding: 10,
         borderRadius: 5,
         alignItems: 'center',
+    },
+    buttonDisabled: {
+        opacity: 0.7,
     },
     buttonText: {
         color: '#fff',
