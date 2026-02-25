@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, TextInput, Alert, FlatList } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, TextInput, Alert, FlatList, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 
 const ExpenseTracker = () => {
   const [isBottomSheetOpen, setIsBottomSheetOpen] = useState(false);
@@ -19,6 +21,9 @@ const ExpenseTracker = () => {
   const [filteredExpenses, setFilteredExpenses] = useState([]);
   const [authToken, setAuthToken] = useState(null);
   const [employeeId, setEmployeeId] = useState(null);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [imageCache, setImageCache] = useState({});
   const currentDate = new Date();
   const currentMonth = currentDate.toLocaleString('default', { month: 'long' });
   const currentYear = currentDate.getFullYear().toString();
@@ -87,6 +92,14 @@ const ExpenseTracker = () => {
     setIsBottomSheetOpen(true);
   };
 
+  const handleCloseBottomSheet = () => {
+    setIsBottomSheetOpen(false);
+    setExpenseType('food');
+    setAmount('');
+    setDescription('');
+    setSelectedImage(null);
+  };
+
   const handleMonthSelect = (month) => {
     setSelectedMonth(month);
     setIsMonthSheetOpen(false);
@@ -110,8 +123,102 @@ const ExpenseTracker = () => {
     setIsTravelSubTypeSheetOpen(false);
   };
 
+  const pickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Photo library permission is required to select images.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setSelectedImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image');
+    }
+  };
+
+  const takeImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Camera permission is required to take photos.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setSelectedImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error taking image:', error);
+      Alert.alert('Error', 'Failed to take image');
+    }
+  };
+
+  const uploadExpenseImage = async (expenseId, imageUri) => {
+    try {
+      console.log('=== Starting Image Upload ===');
+      console.log('Expense ID:', expenseId);
+      console.log('Image URI:', imageUri);
+      
+      const formData = new FormData();
+      const fileName = imageUri.split('/').pop() || 'expense.jpg';
+      const fileType = imageUri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+      
+      formData.append('file', {
+        uri: imageUri,
+        name: fileName,
+        type: fileType,
+      });
+
+      const uploadUrl = `https://api.gajkesaristeels.in/expense/uploadFile?id=${expenseId}&tag=expense`;
+      
+      console.log('Upload Image PUT Call - URL:', uploadUrl);
+      console.log('Upload Image PUT Call - Payload:', {
+        expenseId,
+        fileName,
+        fileType,
+        tag: 'expense',
+      });
+
+      const response = await axios.put(uploadUrl, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      console.log('Upload Image PUT Call - Response Status:', response.status);
+      console.log('Upload Image PUT Call - Response Data:', JSON.stringify(response.data, null, 2));
+      console.log('=== Image Upload Completed ===');
+      
+      return response.data;
+    } catch (error) {
+      console.error('=== Image Upload Failed ===');
+      console.error('Error uploading expense image:', error);
+      console.log('Upload Error Response Status:', error.response?.status);
+      console.log('Upload Error Response Data:', JSON.stringify(error.response?.data, null, 2));
+      throw error;
+    }
+  };
+
   const handleSubmitExpense = async () => {
     try {
+      setIsUploading(true);
       const newExpense = {
         type: expenseType,
         subType: expenseType === 'travel' ? travelSubType : null,
@@ -121,22 +228,59 @@ const ExpenseTracker = () => {
         expenseDate: new Date().toISOString().split('T')[0],
       };
 
+      console.log('Create Expense Payload:', JSON.stringify(newExpense, null, 2));
+
       const response = await axios.post('https://api.gajkesaristeels.in/expense/create', newExpense, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
       });
 
-      if (response.data) {
-        setIsBottomSheetOpen(false);
+      console.log('Create Expense Response:', JSON.stringify(response.data, null, 2));
+
+      // Handle both cases: response.data as number or as object with id
+      let expenseId = null;
+      if (typeof response.data === 'number') {
+        expenseId = response.data;
+      } else if (response.data && response.data.id) {
+        expenseId = response.data.id;
+      }
+
+      if (expenseId) {
+        console.log('Expense ID extracted:', expenseId);
+        
+        // Upload image if one is selected
+        if (selectedImage) {
+          console.log('Image selected, starting upload...');
+          try {
+            const uploadResponse = await uploadExpenseImage(expenseId, selectedImage);
+            console.log('Image upload completed successfully:', JSON.stringify(uploadResponse, null, 2));
+          } catch (uploadError) {
+            console.error('Error uploading image:', uploadError);
+            console.log('Upload Error Details:', {
+              message: uploadError.message,
+              response: uploadError.response?.data,
+              status: uploadError.response?.status,
+            });
+            Alert.alert('Warning', 'Expense created but image upload failed.');
+          }
+        } else {
+          console.log('No image selected, skipping upload');
+        }
+
+        // Close bottom sheet and reset form
+        handleCloseBottomSheet();
         fetchExpenses(authToken, employeeId); // Fetch updated expenses after adding a new one
-        setExpenseType('food');
-        setAmount('');
-        setDescription('');
+      } else {
+        console.error('Failed to extract expense ID from response:', response.data);
+        Alert.alert('Error', 'Failed to create expense. Please try again.');
       }
     } catch (error) {
       console.error('Error creating expense:', error);
+      console.log('Create Expense Error Response:', error.response?.data);
       Alert.alert('Error', 'Failed to add expense');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -240,6 +384,27 @@ const ExpenseTracker = () => {
                 <Ionicons name="chatbubble-outline" size={20} color="#6C63FF" />
                 <Text style={styles.descriptionText}>{expense.description}</Text>
               </View>
+              {expense.attachmentResponse && expense.attachmentResponse.length > 0 && (
+                <View style={styles.attachmentContainer}>
+                  <Text style={styles.attachmentLabel}>Attachments:</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attachmentScroll}>
+                    {expense.attachmentResponse.map((attachment, index) => (
+                      <ExpenseImage
+                        key={index}
+                        expenseId={expense.id}
+                        fileName={attachment.fileName}
+                        authToken={authToken}
+                        onPress={() => {
+                          console.log('Viewing attachment - GET call:', {
+                            expenseId: expense.id,
+                            fileName: attachment.fileName,
+                          });
+                        }}
+                      />
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
             </View>
           </View>
         ))}
@@ -247,14 +412,14 @@ const ExpenseTracker = () => {
       <Modal
         visible={isBottomSheetOpen}
         animationType="slide"
-        onRequestClose={() => setIsBottomSheetOpen(false)}
+        onRequestClose={handleCloseBottomSheet}
         transparent={true}
       >
         <View style={styles.modalBackground}>
           <View style={styles.bottomSheet}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetHeaderText}>Add Expense</Text>
-              <TouchableOpacity onPress={() => setIsBottomSheetOpen(false)}>
+              <TouchableOpacity onPress={handleCloseBottomSheet}>
                 <Ionicons name="close" size={24} color="#fff" />
               </TouchableOpacity>
             </View>
@@ -304,9 +469,40 @@ const ExpenseTracker = () => {
                   placeholder="Enter description"
                 />
               </View>
+              <View style={styles.formGroup}>
+                <Text style={styles.label}>Attachment</Text>
+                {selectedImage ? (
+                  <View style={styles.imageContainer}>
+                    <Image source={{ uri: selectedImage }} style={styles.previewImage} />
+                    <TouchableOpacity
+                      style={styles.removeImageButton}
+                      onPress={() => setSelectedImage(null)}
+                    >
+                      <Ionicons name="close-circle" size={24} color="#D32F2F" />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View style={styles.imageButtonsContainer}>
+                    <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
+                      <Ionicons name="image-outline" size={20} color="#6C63FF" />
+                      <Text style={styles.imageButtonText}>Choose from Gallery</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.imageButton} onPress={takeImage}>
+                      <Ionicons name="camera-outline" size={20} color="#6C63FF" />
+                      <Text style={styles.imageButtonText}>Take Photo</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
             </ScrollView>
-            <TouchableOpacity style={styles.submitButton} onPress={handleSubmitExpense}>
-              <Text style={styles.submitButtonText}>Add Expense</Text>
+            <TouchableOpacity 
+              style={[styles.submitButton, isUploading && styles.submitButtonDisabled]} 
+              onPress={handleSubmitExpense}
+              disabled={isUploading}
+            >
+              <Text style={styles.submitButtonText}>
+                {isUploading ? 'Uploading...' : 'Add Expense'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -582,6 +778,187 @@ const styles = StyleSheet.create({
   bottomSheetItemText: {
     fontSize: 18,
   },
+  imageContainer: {
+    position: 'relative',
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  previewImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 8,
+    resizeMode: 'cover',
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    padding: 0,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  imageButtonsContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  imageButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f2f2f2',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  imageButtonText: {
+    fontSize: 14,
+    color: '#6C63FF',
+    fontWeight: '500',
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
+  },
+  attachmentContainer: {
+    marginTop: 12,
+  },
+  attachmentLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  attachmentScroll: {
+    flexDirection: 'row',
+  },
+  attachmentImageWrapper: {
+    marginRight: 8,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  attachmentImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+  },
+  imageLoadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+  },
+  imageErrorContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+  },
 });
+
+// Component to handle authenticated image loading
+const ExpenseImage = ({ expenseId, fileName, authToken, onPress }) => {
+  const [imageUri, setImageUri] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const loadImage = async () => {
+      try {
+        const imageUrl = `https://api.gajkesaristeels.in/expense/downloadFile/${expenseId}/expense/${fileName}`;
+        
+        console.log('Fetching expense image - GET call:', {
+          expenseId,
+          fileName,
+          imageUrl,
+        });
+
+        // Download image to local file system with auth headers
+        const downloadResult = await FileSystem.downloadAsync(
+          imageUrl,
+          FileSystem.cacheDirectory + `expense_${expenseId}_${fileName}`,
+          {
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+            },
+          }
+        );
+
+        console.log('Expense image GET call - Response Status:', downloadResult.status);
+        console.log('Expense image GET call - Local URI:', downloadResult.uri);
+        console.log('Expense image GET call - Response Data:', JSON.stringify({
+          status: downloadResult.status,
+          uri: downloadResult.uri,
+          headers: downloadResult.headers,
+        }, null, 2));
+
+        if (downloadResult.status === 200) {
+          setImageUri(downloadResult.uri);
+          setError(false);
+        } else {
+          console.error('Failed to download image, status:', downloadResult.status);
+          setError(true);
+        }
+      } catch (err) {
+        console.error('Error fetching expense image:', err);
+        console.log('Image GET Error:', {
+          message: err.message,
+          code: err.code,
+        });
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (expenseId && fileName && authToken) {
+      loadImage();
+    }
+  }, [expenseId, fileName, authToken]);
+
+  if (loading) {
+    return (
+      <View style={[styles.attachmentImageWrapper, styles.imageLoadingContainer]}>
+        <ActivityIndicator size="small" color="#6C63FF" />
+      </View>
+    );
+  }
+
+  if (error || !imageUri) {
+    return (
+      <View style={[styles.attachmentImageWrapper, styles.imageErrorContainer]}>
+        <Ionicons name="image-outline" size={24} color="#999" />
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      style={styles.attachmentImageWrapper}
+      onPress={onPress}
+    >
+      <Image
+        source={{ uri: imageUri }}
+        style={styles.attachmentImage}
+        resizeMode="cover"
+        onLoad={() => {
+          console.log('Image loaded successfully:', imageUri);
+        }}
+        onError={(err) => {
+          console.error('Error displaying image:', err);
+        }}
+      />
+    </TouchableOpacity>
+  );
+};
 
 export default ExpenseTracker;

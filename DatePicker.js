@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal, Animated, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Modal, Animated, Dimensions, ScrollView } from 'react-native';
 import { format, eachDayOfInterval, startOfWeek, endOfWeek, add, startOfMonth, endOfMonth, isSameDay } from 'date-fns';
 
 const { width } = Dimensions.get('window');
@@ -31,22 +31,36 @@ const getFontSize = () => {
 
 const fontSizes = getFontSize();
 
-const DatePicker = ({ isVisible, onClose, onSelect }) => {
+const DatePicker = ({ isVisible, onClose, onSelect, allowPast = false }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
   const animatedValue = useRef(new Animated.Value(0)).current;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Year options for quick navigation (for DOB and other past-date use cases)
+  const endYear = today.getFullYear();
+  const startYear = endYear - 80; // 80 years range, e.g. 1945-2025
+  const years = [];
+  for (let y = endYear; y >= startYear; y -= 1) {
+    years.push(y);
+  }
 
   const startDay = startOfWeek(startOfMonth(currentMonth));
   const endDay = endOfWeek(endOfMonth(currentMonth));
   const days = eachDayOfInterval({ start: startDay, end: endDay });
 
   const onDayPress = (day) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Set time to midnight for accurate comparison
-  
-    if (day >= today) {
-      setSelectedDate(day);
-      onSelect(day);
+    const dayAtMidnight = new Date(day);
+    dayAtMidnight.setHours(0, 0, 0, 0);
+
+    const isValid =
+      allowPast ? dayAtMidnight <= today : dayAtMidnight >= today;
+
+    if (isValid) {
+      setSelectedDate(dayAtMidnight);
+      onSelect(dayAtMidnight);
       onClose();
     }
   };
@@ -88,23 +102,61 @@ const DatePicker = ({ isVisible, onClose, onSelect }) => {
               <Text style={[styles.navigationArrow, isSmallScreen && styles.navigationArrowSmall]}>{'>'}</Text>
             </TouchableOpacity>
           </View>
+
+          {allowPast && (
+            <View style={styles.yearScrollContainer}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.yearScrollContent}
+              >
+                {years.map((year) => {
+                  const isSelectedYear = year === currentMonth.getFullYear();
+                  return (
+                    <TouchableOpacity
+                      key={year}
+                      style={[styles.yearPill, isSelectedYear && styles.yearPillSelected]}
+                      onPress={() => {
+                        setCurrentMonth((prev) => {
+                          const newDate = new Date(prev);
+                          newDate.setFullYear(year);
+                          return newDate;
+                        });
+                      }}
+                    >
+                      <Text style={[styles.yearText, isSelectedYear && styles.yearTextSelected]}>
+                        {year}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
           <View style={styles.dayNamesContainer}>
             {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((dayName) => (
               <Text key={dayName} style={[styles.dayName, isSmallScreen && styles.dayNameSmall]}>{dayName}</Text>
             ))}
           </View>
           <Animated.View style={[styles.datesContainer, animatedStyle]}>
-            {days.map((day, index) => (
+            {days.map((day, index) => {
+              const dayAtMidnight = new Date(day);
+              dayAtMidnight.setHours(0, 0, 0, 0);
+
+              const isDisabled = allowPast ? dayAtMidnight > today : dayAtMidnight < today;
+
+              return (
               <TouchableOpacity
                 key={index}
                 style={[
                   styles.dateItem,
                   isSameDay(day, selectedDate) && styles.selectedDate,
                   isSameDay(day, new Date()) && styles.todayDate,
-                  day < new Date() && styles.disabledDate,
+                  isDisabled && styles.disabledDate,
                 ]}
-                onPress={() => day >= new Date() && onDayPress(day)}
-                disabled={day < new Date()}
+                onPress={() => !isDisabled && onDayPress(day)}
+                disabled={isDisabled}
               >
                 <Text style={[
                   styles.dateText,
@@ -115,7 +167,7 @@ const DatePicker = ({ isVisible, onClose, onSelect }) => {
                   {format(day, 'd')}
                 </Text>
               </TouchableOpacity>
-            ))}
+            )})}
           </Animated.View>
           <TouchableOpacity style={styles.closeButton} onPress={onClose}>
             <Text style={styles.closeButtonText}>Close</Text>
@@ -170,6 +222,34 @@ const styles = StyleSheet.create({
   navigationArrowSmall: {
     fontSize: 20,
     paddingHorizontal: 5,
+  },
+  yearScrollContainer: {
+    width: '100%',
+    marginBottom: isSmallScreen ? 4 : 8,
+  },
+  yearScrollContent: {
+    paddingHorizontal: isSmallScreen ? 4 : 8,
+  },
+  yearPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginRight: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  yearPillSelected: {
+    backgroundColor: '#4F46E5',
+    borderColor: '#4F46E5',
+  },
+  yearText: {
+    fontSize: 12,
+    color: '#4B5563',
+  },
+  yearTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   monthLabel: {
     fontSize: fontSizes.monthLabel,

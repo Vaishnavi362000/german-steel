@@ -149,6 +149,10 @@ const App = () => {
   useEffect(() => {
     async function updateApp() {
       try {
+        // Expo Go doesn't support expo-updates APIs like checkForUpdateAsync.
+        // In real builds, this is enabled (if expo-updates is configured).
+        if (!Updates.isEnabled) return;
+
         const { isAvailable } = await Updates.checkForUpdateAsync();
         if (isAvailable) {
           await Updates.fetchUpdateAsync();
@@ -159,6 +163,9 @@ const App = () => {
           );
         }
       } catch (e) {
+        // Avoid noisy logs in Expo Go.
+        const msg = e?.message || '';
+        if (msg.includes('checkForUpdateAsync() is not supported in Expo Go')) return;
         console.error('Error fetching updates', e);
       }
     }

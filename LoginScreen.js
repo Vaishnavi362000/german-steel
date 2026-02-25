@@ -12,14 +12,12 @@ import {
   Keyboard,
   ActivityIndicator,
 } from 'react-native';
-import { CheckBox } from 'react-native-elements';
 import { Ionicons } from '@expo/vector-icons';
 import loginIllustration from './assets/Login.jpg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
 import axios from 'axios';
 
-const APP_VERSION = "2.6"; // Make sure this matches your actual app version
+const APP_VERSION = "2.8"; // Make sure this matches your actual app version
 
 const LoginScreen = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
@@ -29,7 +27,6 @@ const LoginScreen = ({ onLoginSuccess }) => {
   const [errorMessage, setErrorMessage] = useState('');
   const [isAppUpToDate, setIsAppUpToDate] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
-  const navigation = useNavigation();
   const scrollViewRef = useRef(null);
 
   useEffect(() => {
@@ -105,13 +102,6 @@ const LoginScreen = ({ onLoginSuccess }) => {
     return 0;
   };
 
-  const navigateToUserProfile = () => {
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'UserProfile' }],
-    });
-  };
-
   const handleLogin = async () => {
     if (password.length < 6) {
       setErrorMessage('Password must be at least 6 characters long.');
@@ -154,10 +144,11 @@ const LoginScreen = ({ onLoginSuccess }) => {
             await AsyncStorage.removeItem('savedEmail');
             await AsyncStorage.removeItem('savedPassword');
           }
-  
+
           onLoginSuccess(employeeId, token);
-          console.log('Login successful, navigating to user profile.');
-          navigateToUserProfile();
+          // Navigation is controlled by App.js based on authToken.
+          // Once authToken is set, the AuthStack is replaced by the Tab navigator.
+          console.log('Login successful.');
         } else {
           setErrorMessage('The server did not return the expected token.');
         }
@@ -218,14 +209,19 @@ const LoginScreen = ({ onLoginSuccess }) => {
                   <Text style={styles.errorText}>{errorMessage}</Text>
                 ) : null}
                 <View style={styles.checkboxContainer}>
-                  <CheckBox
-                    title="Save Password"
-                    checked={savePassword}
-                    onPress={() => setSavePassword(!savePassword)}
-                    containerStyle={styles.checkbox}
-                    textStyle={styles.checkboxText}
-                    checkedColor="#6C63FF"
-                  />
+                  <TouchableOpacity
+                    style={styles.checkboxRow}
+                    onPress={() => setSavePassword((v) => !v)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: savePassword }}
+                    accessibilityLabel="Save Password"
+                    activeOpacity={0.8}
+                  >
+                    <View style={[styles.checkboxBox, savePassword && styles.checkboxBoxChecked]}>
+                      {savePassword && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+                    </View>
+                    <Text style={styles.checkboxLabel}>Save Password</Text>
+                  </TouchableOpacity>
                 </View>
                 <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={isLoading}>
                   {isLoading ? (
@@ -318,13 +314,25 @@ const LoginScreen = ({ onLoginSuccess }) => {
       alignItems: 'center',
       width: '100%',
     },
-    checkbox: {
-      backgroundColor: 'transparent',
-      borderWidth: 0,
-      margin: 0,
-      padding: 0,
+    checkboxRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
     },
-    checkboxText: {
+    checkboxBox: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      borderWidth: 2,
+      borderColor: '#6C63FF',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+      backgroundColor: 'transparent',
+    },
+    checkboxBoxChecked: {
+      backgroundColor: '#6C63FF',
+    },
+    checkboxLabel: {
       fontWeight: 'normal',
       fontSize: 16,
       color: '#4B5563',

@@ -37,7 +37,7 @@ const YesterdayStatsScreen = ({ route }) => {
         dayOfWeek === 1 ? today.clone().subtract(2, 'days') : today.clone().subtract(1, 'days');
       const targetDateStr = targetMoment.format('YYYY-MM-DD');
 
-      const apiUrl = `http://ec2-3-88-111-83.compute-1.amazonaws.com:8081/employee/getYesterdayStats?date=${targetDateStr}&employeeId=${employeeId}`;
+      const apiUrl = `https://api.gajkesaristeels.in/employee/getYesterdayStats?date=${targetDateStr}&employeeId=${employeeId}`;
 
       console.log('=== YESTERDAY STATS API CALL ===');
       console.log('API URL:', apiUrl);
