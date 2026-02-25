@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
 
 const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) => {
@@ -7,6 +7,7 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
   const [brandName, setBrandName] = useState('');
   const [pros, setPros] = useState('');
   const [cons, setCons] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     fetchBrandsProCons();
@@ -27,6 +28,10 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
   };
 
   const addProCons = async () => {
+    if (isAdding) {
+      return;
+    }
+
     if (!brandName.trim()) {
       Alert.alert('Error', 'Please enter a brand name');
       return;
@@ -39,6 +44,7 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
     }];
 
     try {
+      setIsAdding(true);
       await axios.put(`https://api.gajkesaristeels.in/visit/addProCons?visitId=${visitId}`, payload, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
@@ -51,6 +57,8 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
     } catch (error) {
       console.error('Error adding pro cons:', error);
       Alert.alert('Error', 'Failed to add brand. Please try again.');
+    } finally {
+      setIsAdding(false);
     }
   };
 
@@ -91,8 +99,16 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
             value={cons}
             onChangeText={setCons}
           />
-          <TouchableOpacity style={styles.button} onPress={addProCons}>
-            <Text style={styles.buttonText}>Add Brand</Text>
+          <TouchableOpacity
+            style={[styles.button, isAdding && styles.buttonDisabled]}
+            onPress={addProCons}
+            disabled={isAdding}
+          >
+            {isAdding ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Add Brand</Text>
+            )}
           </TouchableOpacity>
         </>
       )}
@@ -129,6 +145,9 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     alignItems: 'center',
     marginBottom: 20,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   buttonText: {
     color: '#fff',

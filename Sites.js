@@ -35,6 +35,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
         siteAddress: '',
         isCompleted: false
     });
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
         fetchSites();
@@ -61,7 +62,12 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
     };
 
     const handleSubmit = async () => {
+        if (isSubmitting) {
+            return;
+        }
+
         try {
+            setIsSubmitting(true);
             const siteData = {
                 siteName: siteForm.siteName,
                 startDate: format(siteForm.startDate, 'yyyy-MM-dd'),
@@ -116,6 +122,8 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
         } catch (error) {
             console.error('Error submitting site:', error);
             Alert.alert('Error', 'Failed to submit site. Please try again.');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -323,12 +331,17 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity 
-                    style={styles.submitButton} 
+                    style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]} 
                     onPress={handleSubmit}
+                    disabled={isSubmitting}
                 >
-                    <Text style={styles.submitButtonText}>
-                        {editingSite ? 'Update' : 'Add'} Site
-                    </Text>
+                    {isSubmitting ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                        <Text style={styles.submitButtonText}>
+                            {editingSite ? 'Update' : 'Add'} Site
+                        </Text>
+                    )}
                 </TouchableOpacity>
             </View>
         </View>

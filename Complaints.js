@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, Image, ActivityIndicator } from 'react-native';
 import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -8,6 +8,7 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [images, setImages] = useState([]);
+  const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     fetchComplaints();
@@ -29,12 +30,17 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
   };
 
   const handleAddComplaint = async () => {
+    if (isAdding) {
+      return;
+    }
+
     if (!title.trim()) {
       Alert.alert('Incomplete Form', 'Please fill in the title field.');
       return;
     }
 
     try {
+      setIsAdding(true);
       const newComplaint = {
         taskTitle: title.trim(),
         taskDesciption: description.trim(),
@@ -62,6 +68,8 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
     } catch (error) {
       console.error('Error creating complaint:', error);
       Alert.alert('Error', 'Failed to add complaint. Please try again.');
+    } finally {
+      setIsAdding(false);
     }
   };
 
@@ -218,8 +226,16 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
               </View>
             ))}
           </View>
-          <TouchableOpacity style={styles.button} onPress={handleAddComplaint}>
-            <Text style={styles.buttonText}>Add Complaint</Text>
+          <TouchableOpacity
+            style={[styles.button, isAdding && styles.buttonDisabled]}
+            onPress={handleAddComplaint}
+            disabled={isAdding}
+          >
+            {isAdding ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Add Complaint</Text>
+            )}
           </TouchableOpacity>
         </>
       )}
@@ -303,6 +319,9 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     alignItems: 'center',
     marginBottom: 20,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   buttonText: {
     color: '#fff',

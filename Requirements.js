@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
 
 const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
   const [requirements, setRequirements] = useState([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     fetchRequirements();
@@ -27,12 +28,17 @@ const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
   };
 
   const handleAddRequirement = async () => {
+    if (isAdding) {
+      return;
+    }
+
     if (!title.trim() && !description.trim()) {
       Alert.alert('Incomplete Form', 'Please fill in at least one field.');
       return;
     }
 
     try {
+      setIsAdding(true);
       const response = await axios.post('https://api.gajkesaristeels.in/task/create', {
         taskTitle: title.trim(),
         taskDescription: description.trim(),
@@ -57,6 +63,8 @@ const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
     } catch (error) {
       console.error('Error creating requirement:', error);
       Alert.alert('Error', 'Failed to add requirement. Please try again.');
+    } finally {
+      setIsAdding(false);
     }
   };
 
@@ -86,8 +94,16 @@ const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
             onChangeText={setDescription}
             multiline
           />
-          <TouchableOpacity style={styles.button} onPress={handleAddRequirement}>
-            <Text style={styles.buttonText}>Add Requirement</Text>
+          <TouchableOpacity
+            style={[styles.button, isAdding && styles.buttonDisabled]}
+            onPress={handleAddRequirement}
+            disabled={isAdding}
+          >
+            {isAdding ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Add Requirement</Text>
+            )}
           </TouchableOpacity>
         </>
       )}

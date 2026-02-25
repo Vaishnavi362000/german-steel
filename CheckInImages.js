@@ -15,6 +15,7 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
   const [isConfirmLoading, setIsConfirmLoading] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
+  const [isCameraReady, setIsCameraReady] = useState(false);
 
   useEffect(() => {
     // This effect will run when the component mounts or when isDisabled changes
@@ -25,32 +26,13 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
 
   const requestCameraAndPhotosPermissions = async () => {
     try {
-      if (!permission) {
-        const result = await requestPermission();
-        if (!result.granted) {
-          Alert.alert(
-            'Permission Required', 
-            'Camera permission is required to take photos.', 
-            [
-              {
-                text: 'Open Settings',
-                onPress: () => Linking.openSettings(),
-              },
-              {
-                text: 'Cancel',
-                style: 'cancel',
-              },
-            ]
-          );
-          return false;
-        }
-      }
-
+      const cameraPermission = await requestPermission();
       const { status: photosStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (photosStatus !== 'granted') {
+
+      if (!cameraPermission.granted || photosStatus !== 'granted') {
         Alert.alert(
           'Permission Required', 
-          'Photo library permission is required to select images.', 
+          'Camera and photo library permissions are required to add images.', 
           [
             {
               text: 'Open Settings',
@@ -81,6 +63,7 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
     try {
       const hasPermissions = await requestCameraAndPhotosPermissions();
       if (hasPermissions) {
+        setIsCameraReady(false);
         setIsCameraOpen(true);
       }
     } catch (error) {
@@ -94,11 +77,35 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
   };
 
   const handleCapture = async () => {
+    console.log('📸 [CheckInImages] handleCapture called');
+    if (!permission?.granted) {
+      const camPerm = await requestPermission();
+      if (!camPerm?.granted) {
+        Alert.alert('Permission Required', 'Camera permission is required to capture images.');
+        return;
+      }
+    }
+    if (!isCameraReady) {
+      Alert.alert('Please wait', 'Camera is initializing. Try again in a moment.');
+      return;
+    }
     if (cameraRef.current) {
-      const options = { quality: 0.5, base64: true };
-      const data = await cameraRef.current.takePictureAsync(options);
-      setCapturedImage(data.uri);
-      setIsCameraOpen(false);
+      try {
+        console.log('📸 [CheckInImages] Taking picture...');
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.5,
+          base64: true,
+        });
+        console.log('📸 [CheckInImages] Picture taken:', photo.uri);
+        setCapturedImage(photo.uri);
+        setIsCameraOpen(false);
+        console.log('📸 [CheckInImages] Captured image set, camera closed');
+      } catch (error) {
+        console.error('❌ [CheckInImages] Error taking picture:', error);
+        Alert.alert('Error', 'Failed to capture image. Please try again.');
+      }
+    } else {
+      console.error('❌ [CheckInImages] Camera ref is not available');
     }
   };
 
@@ -224,6 +231,15 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
               ref={cameraRef} 
               style={styles.camera} 
               facing="back"
+              onCameraReady={() => {
+                console.log('✅ [CheckInImages] Camera is ready');
+                setIsCameraReady(true);
+              }}
+              onMountError={(e) => {
+                console.error('❌ [CheckInImages] Camera mount error:', e?.nativeEvent || e);
+                Alert.alert('Camera Error', 'Unable to initialize camera. Please check permissions and try again.');
+                setIsCameraOpen(false);
+              }}
             >
               <View style={styles.cameraButtonContainer}>
                 <TouchableOpacity 
@@ -232,7 +248,11 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
                 >
                   <Ionicons name="close" size={24} color="#FFFFFF" />
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.captureButton} onPress={handleCapture}>
+                <TouchableOpacity
+                  style={[styles.captureButton, !isCameraReady && styles.disabledButton]}
+                  onPress={handleCapture}
+                  disabled={!isCameraReady}
+                >
                   <Text style={styles.captureButtonText}>Capture</Text>
                 </TouchableOpacity>
               </View>

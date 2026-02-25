@@ -19,7 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import axios from 'axios';
 
-const APP_VERSION = "2.5"; // Make sure this matches your actual app version
+const APP_VERSION = "2.6"; // Make sure this matches your actual app version
 
 const LoginScreen = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');

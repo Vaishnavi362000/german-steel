@@ -22,6 +22,7 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
     });
     const [loading, setLoading] = useState(true);
     const [editingContact, setEditingContact] = useState(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     const contactTypes = ['Architect', 'Engineer', 'Builder'];
 
@@ -47,12 +48,17 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
     };
 
     const handleSubmit = async () => {
+        if (isSubmitting) {
+            return;
+        }
+
         if (!contactForm.name || !contactForm.role || !contactForm.contact) {
             Alert.alert('Error', 'Please fill all fields');
             return;
         }
 
         try {
+            setIsSubmitting(true);
             if (editingContact) {
                 // Edit existing contact
                 await axios.put(
@@ -83,6 +89,8 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
         } catch (error) {
             console.error('Error saving contact:', error);
             Alert.alert('Error', 'Failed to save contact');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -197,12 +205,17 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
                     />
                     <View style={styles.formButtons}>
                         <TouchableOpacity
-                            style={styles.submitButton}
+                            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
                             onPress={handleSubmit}
+                            disabled={isSubmitting}
                         >
-                            <Text style={styles.submitButtonText}>
-                                {editingContact ? 'Update' : 'Save'}
-                            </Text>
+                            {isSubmitting ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <Text style={styles.submitButtonText}>
+                                    {editingContact ? 'Update' : 'Save'}
+                                </Text>
+                            )}
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.cancelButton}
