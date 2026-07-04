@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, TextInput, FlatList, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, TextInput, FlatList, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 const Select = ({ options, multiple, placeholder, onSelect, selectedOption }) => {
@@ -14,16 +14,17 @@ const Select = ({ options, multiple, placeholder, onSelect, selectedOption }) =>
   const handleOptionSelect = (option) => {
     if (multiple) {
       const isSelected = selectedOptions.some((selectedOption) => selectedOption.value === option.value);
-      if (isSelected) {
-        setSelectedOptions(selectedOptions.filter((selectedOption) => selectedOption.value !== option.value));
-      } else {
-        setSelectedOptions([...selectedOptions, option]);
-      }
+      const nextSelectedOptions = isSelected
+        ? selectedOptions.filter((selectedOption) => selectedOption.value !== option.value)
+        : [...selectedOptions, option];
+
+      setSelectedOptions(nextSelectedOptions);
+      onSelect(nextSelectedOptions);
     } else {
       setSelectedOptions([option]);
       setModalVisible(false);
+      onSelect(option);
     }
-    onSelect(multiple ? selectedOptions : option);
   };
 
   const handleClearSelection = () => {
@@ -71,27 +72,27 @@ const Select = ({ options, multiple, placeholder, onSelect, selectedOption }) =>
             />
           </View>
 
-          <ScrollView style={styles.optionsContainer}>
-            <FlatList
-              data={filteredOptions}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.optionItem,
-                    selectedOptions.some((selectedOption) => selectedOption.value === item.value) &&
-                    styles.selectedOptionItem,
-                  ]}
-                  onPress={() => handleOptionSelect(item)}
-                >
-                  <Text style={styles.optionText}>{item.label}</Text>
-                  {selectedOptions.some((selectedOption) => selectedOption.value === item.value) && (
-                    <Ionicons name="checkmark" size={20} color="#007AFF" />
-                  )}
-                </TouchableOpacity>
-              )}
-              keyExtractor={(item) => item.value.toString()}
-            />
-          </ScrollView>
+          <FlatList
+            style={styles.optionsList}
+            data={filteredOptions}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[
+                  styles.optionItem,
+                  selectedOptions.some((selectedOption) => selectedOption.value === item.value) &&
+                  styles.selectedOptionItem,
+                ]}
+                onPress={() => handleOptionSelect(item)}
+              >
+                <Text style={styles.optionText}>{item.label}</Text>
+                {selectedOptions.some((selectedOption) => selectedOption.value === item.value) && (
+                  <Ionicons name="checkmark" size={20} color="#007AFF" />
+                )}
+              </TouchableOpacity>
+            )}
+            keyExtractor={(item) => item.value.toString()}
+          />
 
           <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
             <Text style={styles.closeButtonText}>Close</Text>
@@ -145,6 +146,9 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 20,
+  },
+  optionsList: {
+    flex: 1,
   },
   searchContainer: {
     flexDirection: 'row',

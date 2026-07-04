@@ -42,8 +42,21 @@ const AttendanceScreen = () => {
     const [regularizationDate, setRegularizationDate] = useState(new Date()); // Today's date
     const [regularizationStatus, setRegularizationStatus] = useState('Full Day');
     const [regularizationDescription, setRegularizationDescription] = useState('');
+    const [regularizationReason, setRegularizationReason] = useState('');
+    const [regularizationCustomReason, setRegularizationCustomReason] = useState('');
     const [regularizationRequests, setRegularizationRequests] = useState([]);
     const [isPickerVisible, setPickerVisible] = useState(false);
+    const [isReasonPickerVisible, setIsReasonPickerVisible] = useState(false);
+    
+    const reasonOptions = [
+        'Office meeting',
+        'Other office work',
+        'Exhibition',
+        'Request a leave',
+        'Payment follow up',
+        'Site complaint issue',
+        'Other'
+    ];
 
     // Build marked dates for the calendar: highlight selected date and any days with requests
     const markedDates = useMemo(() => {
@@ -162,6 +175,18 @@ const AttendanceScreen = () => {
 
     const handleRegularizationRequest = async () => {
         try {
+            // Validate reason
+            if (!regularizationReason) {
+                Alert.alert('Reason required', 'Please select a reason for this request.');
+                return;
+            }
+
+            // Validate custom reason if "Other" is selected
+            if (regularizationReason === 'Other' && (!regularizationCustomReason || regularizationCustomReason.trim().length < 3)) {
+                Alert.alert('Custom reason required', 'Please enter a custom reason (at least 3 characters).');
+                return;
+            }
+
             // Validate description
             if (!regularizationDescription || regularizationDescription.trim().length < 10) {
                 Alert.alert(
@@ -187,14 +212,24 @@ const AttendanceScreen = () => {
             const token = await AsyncStorage.getItem('userToken');
             const employeeId = await AsyncStorage.getItem('employeeId');
 
+            // Determine the reason value - use custom reason if "Other" is selected
+            const reasonValue = regularizationReason === 'Other' 
+                ? regularizationCustomReason.trim() 
+                : regularizationReason;
+
+            const requestPayload = {
+                employeeId: parseInt(employeeId),
+                logDate: format(regularizationDate, 'yyyy-MM-dd'),
+                requestedStatus: regularizationStatus.toLowerCase(),
+                description: regularizationDescription.trim(),
+                reason: reasonValue,
+            };
+
+            console.log('Create Regularization Request Payload:', JSON.stringify(requestPayload, null, 2));
+
             const response = await axios.post(
                 'https://api.gajkesaristeels.in/request/create',
-                {
-                    employeeId: parseInt(employeeId),
-                    logDate: format(regularizationDate, 'yyyy-MM-dd'),
-                    requestedStatus: regularizationStatus.toLowerCase(),
-                    description: regularizationDescription.trim(),
-                },
+                requestPayload,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -202,12 +237,16 @@ const AttendanceScreen = () => {
                 }
             );
 
+            console.log('Create Regularization Request Response:', JSON.stringify(response.data, null, 2));
+
             if (response.status === 200 || response.status === 201) {
                 setRegularizationModalVisible(false);
                 // Reset the form silently
                 setRegularizationDate(new Date());
                 setRegularizationStatus('Full Day');
                 setRegularizationDescription('');
+                setRegularizationReason('');
+                setRegularizationCustomReason('');
                 // Remove success alert
                 fetchRegularizationRequests();
             } else {
@@ -215,6 +254,7 @@ const AttendanceScreen = () => {
             }
         } catch (error) {
             console.error('Error creating regularization request:', error);
+            console.log('Request Error Response:', error.response?.data);
             Alert.alert('Error', 'Failed to submit regularization request. Please try again.');
         }
     };
@@ -382,11 +422,20 @@ const AttendanceScreen = () => {
             </ScrollView>
             {renderBottomSheet(months, handleMonthChange, isMonthPickerVisible, () => setMonthPickerVisible(false), 'Select Month')}
             {renderBottomSheet(years, handleYearChange, isYearPickerVisible, () => setYearPickerVisible(false), 'Select Year')}
+            {renderBottomSheet(reasonOptions, (reason) => {
+                setRegularizationReason(reason);
+                setIsReasonPickerVisible(false);
+                if (reason !== 'Other') {
+                    setRegularizationCustomReason('');
+                }
+            }, isReasonPickerVisible, () => setIsReasonPickerVisible(false), 'Select Reason')}
             <Modal
                 isVisible={isRegularizationModalVisible}
                 onBackdropPress={() => {
                     setRegularizationModalVisible(false);
                     setRegularizationDescription('');
+                    setRegularizationReason('');
+                    setRegularizationCustomReason('');
                 }}
                 style={styles.bottomModal}
             >
@@ -396,6 +445,8 @@ const AttendanceScreen = () => {
                         <TouchableOpacity onPress={() => {
                             setRegularizationModalVisible(false);
                             setRegularizationDescription('');
+                            setRegularizationReason('');
+                            setRegularizationCustomReason('');
                         }}>
                             <Ionicons name="close" size={24} color="#333" />
                         </TouchableOpacity>
@@ -426,6 +477,30 @@ const AttendanceScreen = () => {
                             <Text style={[styles.statusButtonText, regularizationStatus === 'Half Day' && styles.selectedStatusButtonText]}>Half Day</Text>
                         </TouchableOpacity>
                     </View>
+
+                    <Text style={styles.label}>Reason</Text>
+                    <TouchableOpacity
+                        style={styles.reasonSelectButton}
+                        onPress={() => setIsReasonPickerVisible(true)}
+                    >
+                        <Text style={[styles.reasonSelectText, !regularizationReason && styles.placeholderText]}>
+                            {regularizationReason || 'Select a reason'}
+                        </Text>
+                        <Ionicons name="chevron-down" size={20} color="#6C63FF" />
+                    </TouchableOpacity>
+
+                    {regularizationReason === 'Other' && (
+                        <View style={styles.customReasonContainer}>
+                            <Text style={styles.label}>Custom Reason</Text>
+                            <TextInput
+                                style={styles.customReasonInput}
+                                value={regularizationCustomReason}
+                                onChangeText={setRegularizationCustomReason}
+                                placeholder="Enter your custom reason"
+                                maxLength={100}
+                            />
+                        </View>
+                    )}
 
                     <Text style={styles.label}>Why are you requesting this change?</Text>
                     <Text style={styles.descriptionHelper}>
@@ -606,7 +681,8 @@ const styles = StyleSheet.create({
         padding: 20,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
-        maxHeight: '50%',
+        maxHeight: '80%',
+        minHeight: '50%',
     },
     bottomSheetHandle: {
         width: 40,
@@ -738,6 +814,34 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 18,
         fontWeight: 'bold',
+    },
+    reasonSelectButton: {
+        backgroundColor: '#f0f0f0',
+        padding: 15,
+        borderRadius: 8,
+        marginBottom: 20,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    reasonSelectText: {
+        fontSize: 16,
+        color: '#333',
+        flex: 1,
+    },
+    placeholderText: {
+        color: '#9CA3AF',
+    },
+    customReasonContainer: {
+        marginBottom: 20,
+    },
+    customReasonInput: {
+        backgroundColor: '#f0f0f0',
+        padding: 12,
+        borderRadius: 8,
+        fontSize: 16,
+        color: '#333',
+        marginTop: 8,
     },
     requestsContainer: {
         marginHorizontal: 20,

@@ -112,12 +112,20 @@ function CustomerDetails({ route, navigation }) {
 
   const loadCustomerDetails = useCallback(async () => {
     try {
-      const response = await fetch(`https://api.gajkesaristeels.in/store/getById?id=${customerId}`, {
+      const url = `https://api.gajkesaristeels.in/store/getById?id=${customerId}`;
+      console.log('Fetch Store Details Request (GET /store/getById):', { url, customerId });
+
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
       });
+
+      console.log('Fetch Store Details Response Status:', response.status);
+
       const data = await response.json();
+      console.log('Fetch Store Details Response Body:', JSON.stringify(data, null, 2));
+
       setCustomerDetails(data);
       fetchIntentLevel();
     } catch (error) {
@@ -179,7 +187,7 @@ function CustomerDetails({ route, navigation }) {
       if (response.ok) {
         const visits = await response.json();
         const existingVisitsForStore = visits.filter((visit) => visit.storeId === customerId);
-
+        const hasOngoingVisit = existingVisitsForStore.some((visit) => visit.checkinDate && !visit.checkoutDate);
 
         if (existingVisitsForStore.length > 0) {
           setExistingVisits(existingVisitsForStore);
@@ -217,8 +225,13 @@ function CustomerDetails({ route, navigation }) {
       });
 
       const visitId = response.data;
-      navigation.navigate('VisitScreen', { visitId, authToken });
       closeVisitModal();
+      Alert.alert('Success', 'Visit created successfully.', [
+        {
+          text: 'OK',
+          onPress: () => navigation.navigate('VisitScreen', { visitId, authToken }),
+        },
+      ], { cancelable: false });
     } catch (error) {
       console.error('Error creating visit:', error);
       Alert.alert('Error', 'Failed to create visit. Please try again.');
@@ -299,6 +312,23 @@ function CustomerDetails({ route, navigation }) {
                             icon="receipt-outline"
                             label="GST"
                             value={customerDetails.gstNumber}
+                        />
+                        <InfoRow
+                            icon="calendar-outline"
+                            label="DOB"
+                            value={
+                              customerDetails.dob
+                                ? (() => {
+                                    try {
+                                      const date = new Date(customerDetails.dob);
+                                      if (isNaN(date.getTime())) return customerDetails.dob;
+                                      return format(date, 'dd MMM yyyy');
+                                    } catch {
+                                      return customerDetails.dob;
+                                    }
+                                  })()
+                                : ''
+                            }
                         />
                         <InfoRow
                             icon="map-outline"
@@ -399,6 +429,7 @@ function CustomerDetails({ route, navigation }) {
     const [selectedClientType, setSelectedClientType] = useState(customerDetails.clientType);
     const [customClientType, setCustomClientType] = useState(customerDetails.clientType === 'others' ? customerDetails.customClientType : '');
     const [selectedState, setSelectedState] = useState(customerDetails.state);
+    const [isDobPickerVisible, setIsDobPickerVisible] = useState(false);
 
     useEffect(() => {
       setUpdatedDetails(customerDetails);
@@ -538,6 +569,30 @@ function CustomerDetails({ route, navigation }) {
                     onChangeText={(value) => handleInputChange('primaryContact', value)}
                     keyboardType="phone-pad"
                   />
+                  <Text style={styles.label}>Date of Birth</Text>
+                  <TouchableOpacity
+                    style={styles.input}
+                    onPress={() => setIsDobPickerVisible(true)}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        color: updatedDetails.dob ? '#1F2937' : '#9CA3AF',
+                      }}
+                    >
+                      {updatedDetails.dob
+                        ? (() => {
+                            try {
+                              const date = new Date(updatedDetails.dob);
+                              if (isNaN(date.getTime())) return updatedDetails.dob;
+                              return format(date, 'dd MMM yyyy');
+                            } catch {
+                              return updatedDetails.dob;
+                            }
+                          })()
+                        : 'Select date'}
+                    </Text>
+                  </TouchableOpacity>
                   <Text style={styles.label}>Monthly Sales</Text>
                   <TextInput
                     style={styles.input}
@@ -648,6 +703,16 @@ function CustomerDetails({ route, navigation }) {
               )}
             </ScrollView>
           </ScrollView>
+          <DatePicker
+            isVisible={isDobPickerVisible}
+            onClose={() => setIsDobPickerVisible(false)}
+            onSelect={(date) => {
+              const isoDate = format(date, 'yyyy-MM-dd');
+              handleInputChange('dob', isoDate);
+              setIsDobPickerVisible(false);
+            }}
+            allowPast
+          />
           <View style={styles.modalFooter}>
             <TouchableOpacity style={[styles.footerButton, styles.saveButton]} onPress={handleSave}>
               <Text style={[styles.footerButtonText, styles.saveButtonText]}>Save</Text>
@@ -736,8 +801,33 @@ function CustomerDetails({ route, navigation }) {
     </Modal>
   );
 
+  // Check if today is the customer's birthday
+  const isBirthday = (() => {
+    if (!customerDetails.dob) return false;
+    try {
+      const today = new Date();
+      const dob = new Date(customerDetails.dob);
+      return dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate();
+    } catch {
+      return false;
+    }
+  })();
+
   return (
-    <ScrollView style={styles.container}>
+    <View style={styles.container}>
+      {isBirthday && (
+        <View style={styles.birthdayCard}>
+          <View style={styles.birthdayCardContent}>
+            <Ionicons name="gift" size={32} color="#EC4899" />
+            <View style={styles.birthdayTextContainer}>
+              <Text style={styles.birthdayTitle}>🎉 Happy Birthday! 🎉</Text>
+              <Text style={styles.birthdayMessage}>
+                Today is {customerDetails.clientFirstName} {customerDetails.clientLastName}'s birthday!
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
       {renderCustomerCard()}
       {renderContent()}
       <EditCustomerModal
@@ -745,6 +835,7 @@ function CustomerDetails({ route, navigation }) {
         onClose={() => setModalVisible(false)}
         customerDetails={customerDetails}
         onSave={(updatedDetails) => {
+          console.log('Update Store Payload (PUT /store/edit):', JSON.stringify(updatedDetails, null, 2));
           setCustomerDetails(updatedDetails);
           axios.put(`https://api.gajkesaristeels.in/store/edit?id=${customerId}`, updatedDetails, {
             headers: {
@@ -752,6 +843,7 @@ function CustomerDetails({ route, navigation }) {
             }
           })
             .then((response) => {
+              console.log('Update Store Response (PUT /store/edit):', JSON.stringify(response.data, null, 2));
               console.log('Store Updated Successfully');
               setModalVisible(false);
             })
@@ -838,7 +930,7 @@ function CustomerDetails({ route, navigation }) {
       />
 
       <ConfirmationBottomSheet />
-    </ScrollView>
+    </View>
   );
 }
 
@@ -1256,10 +1348,43 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  birthdayCard: {
+    backgroundColor: '#FDF2F8',
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: '#EC4899',
+    shadowColor: '#EC4899',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  birthdayCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  birthdayTextContainer: {
+    flex: 1,
+  },
+  birthdayTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#EC4899',
+    marginBottom: 4,
+  },
+  birthdayMessage: {
+    fontSize: 14,
+    color: '#9F1239',
+  },
 });
 
 export default CustomerDetails;
-
-
-
 

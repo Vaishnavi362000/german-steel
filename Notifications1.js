@@ -10,6 +10,7 @@ const Notifications1 = ({ route }) => {
   const navigation = useNavigation();
   const { authToken } = route.params;
   const [notifications, setNotifications] = useState([]);
+  const [birthdays, setBirthdays] = useState([]);
 
   useEffect(() => {
     fetchNotifications();
@@ -33,6 +34,24 @@ const Notifications1 = ({ route }) => {
 
       const assignedVisits = response.data.filter(visit => visit.isSelfGenerated === false);
       setNotifications(assignedVisits);
+
+      // Fetch birthdays in the same date range
+      const birthdayResponse = await axios.get(
+        `https://api.gajkesaristeels.in/store/getByDobDateRange?startDate=${startDate}&endDate=${endDate}`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      console.log('Birthday Notifications Response (Notifications1):', JSON.stringify(birthdayResponse.data, null, 2));
+
+      if (Array.isArray(birthdayResponse.data)) {
+        setBirthdays(birthdayResponse.data);
+      } else {
+        setBirthdays([]);
+      }
     } catch (error) {
       console.error('Error fetching notifications:', error);
     }
@@ -85,9 +104,46 @@ const Notifications1 = ({ route }) => {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Assigned Visits</Text>
+        <Text style={styles.headerTitle}>Notifications</Text>
       </View>
       <ScrollView style={styles.scrollView}>
+        {birthdays.length > 0 && (
+          <View style={styles.dateSection}>
+            <Text style={styles.dateText}>Birthdays</Text>
+            {birthdays.map((store, index) => (
+              <TouchableOpacity
+                key={index}
+                style={styles.notificationCard}
+                onPress={() => {
+                  console.log('Birthday notification tapped:', JSON.stringify(store, null, 2));
+                  navigation.navigate('Customer', {
+                    screen: 'CustomerDetails',
+                    params: { customerId: store.storeId || store.id, authToken },
+                  });
+                }}
+              >
+                <View style={[styles.iconContainer, { backgroundColor: '#EC4899' }]}>
+                  <Ionicons name="gift-outline" size={24} color="#FFF" />
+                </View>
+                <View style={styles.notificationContent}>
+                  <View style={styles.notificationHeader}>
+                    <Text style={styles.storeName}>{store.storeName || 'Unknown Store'}</Text>
+                    <View style={[styles.tagContainer, { backgroundColor: '#EC4899' }]}>
+                      <Text style={styles.tagText}>Birthday</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.visitPurpose}>
+                    {`${store.clientFirstName || ''} ${store.clientLastName || ''}`.trim() || 'Customer birthday'}
+                  </Text>
+                  <Text style={styles.notificationTime}>
+                    {store.dob ? moment(store.dob).format('DD MMM') : ''}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {Object.keys(groupedNotifications).map(date => (
           <View key={date} style={styles.dateSection}>
             <Text style={styles.dateText}>{moment(date).format('MMMM D, YYYY')}</Text>

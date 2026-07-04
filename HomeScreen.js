@@ -222,6 +222,7 @@ const HomeScreen = ({ authToken }) => {
       const startDate = today.clone().subtract(2, 'days').format('YYYY-MM-DD');
       const endDate = today.clone().add(1, 'days').format('YYYY-MM-DD');
 
+      // Visit notifications
       const response = await axios.get(
         `https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDate}&end=${endDate}`,
         {
@@ -233,11 +234,29 @@ const HomeScreen = ({ authToken }) => {
 
       const assignedVisits = response.data.filter(visit => visit.isSelfGenerated === false);
 
-      const unread = assignedVisits.filter(visit =>
+      const unreadVisitTasks = assignedVisits.filter(visit =>
         !visit.checkoutLatitude && !visit.checkoutLongitude && !visit.checkoutDate && !visit.checkoutTime
       ).length;
 
-      setUnreadTasks(unread);
+      // Birthday notifications for today
+      const birthdayStart = today.clone().format('YYYY-MM-DD');
+      const birthdayEnd = birthdayStart;
+
+      const birthdayResponse = await axios.get(
+        `https://api.gajkesaristeels.in/store/getByDobDateRange?startDate=${birthdayStart}&endDate=${birthdayEnd}`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      console.log('Birthday Notifications Response (HomeScreen):', JSON.stringify(birthdayResponse.data, null, 2));
+
+      const birthdayCount = Array.isArray(birthdayResponse.data) ? birthdayResponse.data.length : 0;
+
+      // Total notifications include visit tasks + birthdays
+      setUnreadTasks(unreadVisitTasks + birthdayCount);
     } catch (error) {
       console.error('Error fetching notifications:', error);
     }

@@ -74,6 +74,8 @@ const VisitScreen = ({ route }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [confirmationMessage, setConfirmationMessage] = useState('');
   const [isCreatingVisit, setIsCreatingVisit] = useState(false);
+  const [storeDetails, setStoreDetails] = useState(null);
+  const [isBirthday, setIsBirthday] = useState(false);
 
   const fetchSitesCount = async (storeIdParam) => {
     const storeId = storeIdParam || visit?.storeId;
@@ -136,10 +138,23 @@ const VisitScreen = ({ route }) => {
                 Authorization: `Bearer ${authToken}`,
               },
             });
-            setClientType((storeResponse.data.clientType || 'shop').toLowerCase());
+            const storeData = storeResponse.data;
+            setStoreDetails(storeData);
+            setClientType((storeData.clientType || 'shop').toLowerCase());
+            
+            // Check if today is the customer's birthday
+            if (storeData.dob) {
+              const today = new Date();
+              const dob = new Date(storeData.dob);
+              const isTodayBirthday = dob.getMonth() === today.getMonth() && dob.getDate() === today.getDate();
+              setIsBirthday(isTodayBirthday);
+            } else {
+              setIsBirthday(false);
+            }
           } catch (error) {
             console.error('Error fetching store details:', error);
             setClientType('shop'); // Default to shop if fetch fails
+            setIsBirthday(false);
           }
         }
 
@@ -1428,6 +1443,19 @@ const VisitScreen = ({ route }) => {
         </View>
       ) : (
         <ScrollView style={styles.bottomSheetScrollView}>
+          {isBirthday && storeDetails && (
+            <View style={styles.birthdayCard}>
+              <View style={styles.birthdayCardContent}>
+                <Ionicons name="gift" size={32} color="#EC4899" />
+                <View style={styles.birthdayTextContainer}>
+                  <Text style={styles.birthdayTitle}>🎉 Happy Birthday! 🎉</Text>
+                  <Text style={styles.birthdayMessage}>
+                    Today is {storeDetails.clientFirstName} {storeDetails.clientLastName}'s birthday!
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
           {visit && <VisitInfo />}
           <CardActions />
         </ScrollView>
@@ -2315,6 +2343,40 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  birthdayCard: {
+    backgroundColor: '#FDF2F8',
+    borderRadius: 12,
+    padding: 16,
+    margin: 10,
+    borderWidth: 2,
+    borderColor: '#EC4899',
+    shadowColor: '#EC4899',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  birthdayCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  birthdayTextContainer: {
+    flex: 1,
+  },
+  birthdayTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#EC4899',
+    marginBottom: 4,
+  },
+  birthdayMessage: {
+    fontSize: 14,
+    color: '#9F1239',
   },
 });
 

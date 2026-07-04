@@ -6,6 +6,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Select from './Select';
 import NetInfo from '@react-native-community/netinfo';
 import { storePendingCustomer, getPendingCustomers } from './utils/offlineStorage';
+import DatePicker from './DatePicker';
+import { format } from 'date-fns';
 
 const indianStates = [
   { label: 'Andhra Pradesh', value: 'Andhra Pradesh' },
@@ -67,6 +69,7 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
       taluka: '',
       clientType: '',
       customClientType: '',
+      dob: '',
     });
   
     const [selectedState, setSelectedState] = useState(null);
@@ -76,6 +79,7 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
     const [isBottomSheetVisible, setIsBottomSheetVisible] = useState(false);
     const [bottomSheetAnimation] = useState(new Animated.Value(0));
     const [isCreating, setIsCreating] = useState(false);
+    const [isDobPickerVisible, setIsDobPickerVisible] = useState(false);
   
     useEffect(() => {
       if (isVisible) {
@@ -95,6 +99,7 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
         taluka: '',
         clientType: '',
         customClientType: '',
+        dob: '',
       });
       setSelectedState(null);
       setSelectedClientType('');
@@ -118,7 +123,7 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
     const handleCreateCustomer = async () => {
       const newErrors = {};
       Object.keys(newCustomerDetails).forEach(key => {
-        if (!newCustomerDetails[key] && key !== 'customClientType') {
+        if (!newCustomerDetails[key] && key !== 'customClientType' && key !== 'dob') {
           newErrors[key] = `${key.charAt(0).toUpperCase() + key.slice(1)} is required`;
         }
       });
@@ -208,13 +213,20 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
         delete payload.village;
         delete payload.taluka;
         delete payload.customClientType;
-  
+        if (!payload.dob) {
+          delete payload.dob;
+        }
+
+        console.log('Create Store Payload (POST /store/create):', JSON.stringify(payload, null, 2));
+
         const createResponse = await axios.post('https://api.gajkesaristeels.in/store/create', payload, {
           headers: {
             Authorization: `Bearer ${authToken}`,
           },
         });
-  
+
+        console.log('Create Store Response (POST /store/create):', JSON.stringify(createResponse.data, null, 2));
+
         const newCustomerId = createResponse.data;
         Alert.alert("Success", "Customer created successfully!");
         handleClose();
@@ -342,6 +354,45 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
               {renderInput('clientFirstName', 'Client First Name*')}
               {renderInput('clientLastName', 'Client Last Name*')}
               {renderInput('primaryContact', 'Phone number*', 'phone-pad')}
+
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Date of Birth (optional)</Text>
+                <View style={styles.dobRow}>
+                  <TouchableOpacity
+                    style={[styles.input, styles.dobInput]}
+                    onPress={() => setIsDobPickerVisible(true)}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        color: newCustomerDetails.dob ? '#1F2937' : '#9CA3AF',
+                      }}
+                    >
+                      {newCustomerDetails.dob
+                        ? (() => {
+                            try {
+                              const date = new Date(newCustomerDetails.dob);
+                              if (isNaN(date.getTime())) return newCustomerDetails.dob;
+                              return format(date, 'dd MMM yyyy');
+                            } catch {
+                              return newCustomerDetails.dob;
+                            }
+                          })()
+                        : 'Select date (optional)'}
+                    </Text>
+                  </TouchableOpacity>
+                  {!!newCustomerDetails.dob && (
+                    <TouchableOpacity
+                      style={styles.dobClearButton}
+                      onPress={() => handleInputChange('dob', '')}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear date of birth"
+                    >
+                      <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
               {renderInput('village', 'Village*')}
               {renderInput('taluka', 'Taluka*')}
               {renderInput('city', 'City*')}
@@ -379,18 +430,38 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
               {selectedClientType === 'others' && renderInput('customClientType', 'Custom Client Type*')}
   
               <TouchableOpacity 
-                style={styles.createButton} 
+                style={[styles.createButton, isCreating && styles.createButtonDisabled]} 
                 onPress={handleCreateCustomer}
                 disabled={isCreating}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={isCreating ? 'Creating customer' : 'Create customer'}
               >
-                {isCreating ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.createButtonText}>Create Customer</Text>
-                )}
+                <View style={styles.createButtonContent}>
+                  {isCreating && (
+                    <ActivityIndicator
+                      size="small"
+                      color="#FFFFFF"
+                      style={styles.createButtonSpinner}
+                    />
+                  )}
+                  <Text style={styles.createButtonText}>
+                    {isCreating ? 'Creating...' : 'Create Customer'}
+                  </Text>
+                </View>
               </TouchableOpacity>
             </View>
           </ScrollView>
+          <DatePicker
+            isVisible={isDobPickerVisible}
+            onClose={() => setIsDobPickerVisible(false)}
+            onSelect={(date) => {
+              const isoDate = format(date, 'yyyy-MM-dd');
+              handleInputChange('dob', isoDate);
+              setIsDobPickerVisible(false);
+            }}
+            allowPast
+          />
         </KeyboardAvoidingView>
         {renderExistingCustomerBottomSheet()}
       </Modal>
@@ -435,6 +506,17 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
       fontSize: 16,
       color: '#1F2937',
     },
+    dobRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    dobInput: {
+      flex: 1,
+    },
+    dobClearButton: {
+      marginLeft: 10,
+      padding: 6,
+    },
     inputError: {
       borderColor: '#EF4444',
     },
@@ -451,6 +533,17 @@ const CreateCustomerComponent = ({ isVisible, onClose, authToken, onCustomerCrea
       alignItems: 'center',
       marginTop: 24,
       marginBottom: 40,
+    },
+    createButtonDisabled: {
+      opacity: 0.7,
+    },
+    createButtonContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    createButtonSpinner: {
+      marginRight: 10,
     },
     createButtonText: {
       fontSize: 16,

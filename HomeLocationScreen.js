@@ -20,7 +20,7 @@ const HomeLocationScreen = ({ route, navigation }) => {
           },
         });
         
-        if (response.data.houseLatitude !== 0 && response.data.houseLongitude !== 0) {
+        if (response.data.houseLatitude != null && response.data.houseLongitude != null && response.data.houseLatitude !== 0 && response.data.houseLongitude !== 0) {
           setCurrentLocation({
             latitude: response.data.houseLatitude,
             longitude: response.data.houseLongitude,
@@ -192,10 +192,10 @@ const HomeLocationScreen = ({ route, navigation }) => {
               <Text style={styles.locationTitle}>Current Home Location</Text>
               <View style={styles.coordinatesContainer}>
                 <Text style={styles.coordinatesText}>
-                  Latitude: {currentLocation.latitude.toFixed(6)}
+                  Latitude: {currentLocation.latitude != null ? Number(currentLocation.latitude).toFixed(6) : 'N/A'}
                 </Text>
                 <Text style={styles.coordinatesText}>
-                  Longitude: {currentLocation.longitude.toFixed(6)}
+                  Longitude: {currentLocation.longitude != null ? Number(currentLocation.longitude).toFixed(6) : 'N/A'}
                 </Text>
               </View>
             </View>
