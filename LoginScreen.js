@@ -17,7 +17,7 @@ import loginIllustration from './assets/Login.jpg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
-const APP_VERSION = "2.9"; // Make sure this matches your actual app version
+const APP_VERSION = "3.0"; // Make sure this matches your actual app version
 
 const LoginScreen = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
