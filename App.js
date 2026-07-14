@@ -16,6 +16,9 @@ import CustomerDetails from './CustomerDetails';
 import VisitsList from './VisitsList';
 import VisitScreen from './VisitScreen';
 import VisitsTimeline from './VisitsTimeline';
+import MeetingsList from './MeetingsList';
+import MeetingDetail from './MeetingDetail';
+import NewMeeting from './NewMeeting';
 import UserProfile from './UserProfile';
 import ExpenseScreen from './ExpenseScreen';
 import AttendanceScreen from './AttendanceScreen';
@@ -98,6 +101,15 @@ function HomeStackScreen({ authToken, handleLogout }) {
       </HomeStack.Screen>
       <HomeStack.Screen name="YesterdayStatsScreen">
         {(props) => <YesterdayStatsScreen {...props} authToken={authToken} />}
+      </HomeStack.Screen>
+      <HomeStack.Screen name="MeetingsList">
+        {(props) => <MeetingsList {...props} authToken={authToken} />}
+      </HomeStack.Screen>
+      <HomeStack.Screen name="NewMeeting">
+        {(props) => <NewMeeting {...props} authToken={authToken} />}
+      </HomeStack.Screen>
+      <HomeStack.Screen name="MeetingDetail">
+        {(props) => <MeetingDetail {...props} authToken={authToken} />}
       </HomeStack.Screen>
     </HomeStack.Navigator>
   );

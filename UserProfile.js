@@ -85,6 +85,7 @@ const UserProfile = ({ authToken, onLogout }) => {
           <View style={styles.cardGrid}>
             <FeatureCard title="Expense" icon="wallet-outline" color="#FF6B6B" onPress={() => navigation.navigate('ExpenseScreen')} />
             <FeatureCard title="Attendance" icon="calendar-outline" color="#4ECDC4" onPress={() => navigation.navigate('AttendanceScreen')} />
+            <FeatureCard title="Meetings" icon="people-circle-outline" color="#7C3AED" onPress={() => navigation.navigate('MeetingsList', { authToken })} />
             <FeatureCard title="Requirements" icon="list-outline" color="#45B7D1" onPress={() => navigation.navigate('RequirementsScreen', { authToken })} />
             <FeatureCard title="Complaints" icon="warning-outline" color="#FFA07A" onPress={() => navigation.navigate('ComplaintsScreen', { authToken })} />
             <FeatureCard title="Pricing" icon="pricetag-outline" color="#98D8C8" onPress={() => navigation.navigate('PricingScreen', { authToken })} />
