@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import CreateCustomerComponent from './CreateCustomerComponent';
 
-const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh }) => {
+const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh, route }) => {
   const [isCreateCustomerModalOpen, setIsCreateCustomerModalOpen] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -18,6 +18,13 @@ const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh }) => {
   const [location, setLocation] = useState(null);
 
   const navigation = useNavigation();
+
+  useEffect(() => {
+    if (route?.params?.openCreateCustomer) {
+      setIsCreateCustomerModalOpen(true);
+      navigation.setParams({ openCreateCustomer: false });
+    }
+  }, [navigation, route?.params?.openCreateCustomer]);
 
   const updateLocation = useCallback(async () => {
     try {

@@ -13,26 +13,38 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import MeetingAttendeePicker from './MeetingAttendeePicker';
+import MeetingDealerShopPicker from './MeetingDealerShopPicker';
 import MeetingTimePicker, {
   formatMeetingTimeDisplay,
   isValidMeetingTime,
 } from './MeetingTimePicker';
 import {
+  DEFAULT_MEETING_TYPES,
   MEETING_STATUSES,
   addWalkInAttendee as createWalkInAttendance,
   cancelMeeting,
+  deleteMeetingExpense,
+  deleteMeetingGift,
   deriveAttendeeCategoryOptions,
   editMeeting,
+  finaliseMeetingAttendance,
   getAttendeeMaster,
+  getDealerShops,
+  getExpenseHeads,
+  getGiftItems,
   getMeetingById,
+  getMeetingTypes,
   getStatusColor,
   getStatusLabel,
   isTabUnlocked,
-  markMeetingAttendance,
+  markNoExpenses,
+  markNoGifts,
+  resubmitFinalReportCorrection,
+  resubmitMeetingCorrection,
   saveMeetingGifts,
-  startMeetingExecution,
   submitMeetingExpenses,
   submitMeetingReport,
   submitMeeting,
@@ -54,11 +66,29 @@ const emptyRequest = {
   city: '',
   state: '',
   location: '',
+  storeId: '',
+  storeName: '',
   referenceName: '',
   purpose: '',
+  expectedBusinessImpact: '',
+  expectedTurnout: '',
   expectedBudget: '',
+  companyContribution: '',
+  dealerContribution: '',
+  budgetRemarks: '',
   expectedMaterials: '',
   remarks: '',
+};
+
+const initialPlannedExpense = {
+  expenseHead: '',
+  amount: '',
+};
+
+const initialPlannedGift = {
+  giftItem: '',
+  quantity: '1',
+  estimatedAmount: '',
 };
 
 const emptyAttendee = {
@@ -89,6 +119,9 @@ const emptyGiftDraft = {
 const emptyExpenseDraft = {
   expenseHead: '',
   amount: '',
+  paidBy: 'COMPANY',
+  companyAmount: '',
+  dealerAmount: '',
   expenseDate: todayString(),
   remarks: '',
 };
@@ -97,8 +130,11 @@ const emptyReportDraft = {
   meetingSummary: '',
   keyDiscussionPoints: '',
   leadsGenerated: '',
+  leadCount: '',
+  leadDetails: '',
   interestedCustomers: '',
   competitorInformation: '',
+  actualBusinessOutcome: '',
   finalRemarks: '',
 };
 
@@ -150,6 +186,53 @@ const mapAttendeeForExecution = (attendee, index) => {
 
 const getMeetingAttendeeId = (attendee = {}) => attendee.meetingAttendeeId || attendee.id;
 const getGiftRecipientId = (attendee = {}) => String(getMeetingAttendeeId(attendee) || '');
+const getGiftLineId = (gift = {}) => gift.giftId || gift.id || gift.meetingGiftId;
+const getGiftLineAttendeeId = (gift = {}) => String(
+  gift.meetingAttendeeId
+  || gift.attendeeId
+  || gift.meetingAttendee?.id
+  || gift.attendee?.id
+  || ''
+);
+const getExpenseLineId = (expense = {}) => expense.expenseId || expense.id || expense.meetingExpenseId;
+const normalizeCompletionState = (value) => String(value || '').trim().replace(/[\s-]+/g, '_').toUpperCase();
+const getCorrectionTabFromStage = (value) => {
+  const stage = normalizeCompletionState(value);
+  if (stage.includes('FINAL') || stage.includes('REPORT')) return 'finalReport';
+  if (stage.includes('EXPENSE')) return 'expenses';
+  if (stage.includes('GIFT')) return 'gifts';
+  if (stage.includes('EXECUTION') || stage.includes('ATTENDANCE')) return 'execution';
+  if (stage.includes('ATTENDEE')) return 'attendees';
+  return 'request';
+};
+const hasFinalReportData = (meeting = {}) => [
+  meeting.meetingSummary,
+  meeting.keyDiscussionPoints,
+  meeting.leadsGenerated,
+  meeting.leadCount,
+  meeting.leadDetails,
+  meeting.interestedCustomers,
+  meeting.competitorInformation,
+  meeting.actualBusinessOutcome,
+  meeting.finalRemarks,
+].some((value) => String(value || '').trim());
+const getCorrectionTabForMeeting = (meeting = {}) => {
+  const stageValue = meeting?.correctionStage || meeting?.correctionSection || meeting?.stageLabel;
+  if (stageValue) return getCorrectionTabFromStage(stageValue);
+
+  const returnValue = meeting?.returnStatus || meeting?.returnToStatus || meeting?.previousStatus || meeting?.fromStatus;
+  if (normalizeCompletionState(returnValue).includes('REPORT_SUBMITTED')) return 'finalReport';
+
+  return hasFinalReportData(meeting) ? 'finalReport' : 'request';
+};
+const getCorrectionSectionLabel = (tabKey) => ({
+  request: 'Request',
+  attendees: 'Expected Attendees',
+  execution: 'Execution / Attendance',
+  gifts: 'Gifts',
+  expenses: 'Expenses',
+  finalReport: 'Final Report',
+}[tabKey] || 'Request');
 
 const getCategoryStyles = (category) => {
   const normalized = String(category || '').trim().toLowerCase();
@@ -276,6 +359,10 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const [meeting, setMeeting] = useState(null);
   const [activeTab, setActiveTab] = useState('request');
   const [requestDraft, setRequestDraft] = useState(emptyRequest);
+  const [plannedExpenses, setPlannedExpenses] = useState([]);
+  const [plannedExpenseDraft, setPlannedExpenseDraft] = useState(initialPlannedExpense);
+  const [plannedGifts, setPlannedGifts] = useState([]);
+  const [plannedGiftDraft, setPlannedGiftDraft] = useState(initialPlannedGift);
   const [expectedAttendees, setExpectedAttendees] = useState([]);
   const [attendeeDraft, setAttendeeDraft] = useState(emptyAttendee);
   const [executionDraft, setExecutionDraft] = useState(createExecutionDraft(null, emptyRequest));
@@ -290,24 +377,39 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const [expenseDraft, setExpenseDraft] = useState(emptyExpenseDraft);
   const [expenseRemarks, setExpenseRemarks] = useState('');
   const [reportDraft, setReportDraft] = useState(emptyReportDraft);
+  const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
   const [isCancelPanelOpen, setIsCancelPanelOpen] = useState(false);
   const [cancelRemarks, setCancelRemarks] = useState('');
   const [attendeeMaster, setAttendeeMaster] = useState([]);
   const [attendeeCategoryOptions, setAttendeeCategoryOptions] = useState([]);
+  const [meetingTypes, setMeetingTypes] = useState(DEFAULT_MEETING_TYPES);
+  const [giftItems, setGiftItems] = useState([]);
+  const [expenseHeads, setExpenseHeads] = useState([]);
+  const [dealerShops, setDealerShops] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isAttendeePickerOpen, setIsAttendeePickerOpen] = useState(false);
+  const [isDealerPickerOpen, setIsDealerPickerOpen] = useState(false);
   const [isLoadingAttendeeMaster, setIsLoadingAttendeeMaster] = useState(false);
+  const [isLoadingDealers, setIsLoadingDealers] = useState(false);
   const [hasLoadedAttendeeMaster, setHasLoadedAttendeeMaster] = useState(false);
+  const [hasLoadedDealers, setHasLoadedDealers] = useState(false);
   const [error, setError] = useState('');
 
   const status = getStatus(meeting);
   const request = getRequest(meeting);
+  const reportDraftStorageKey = meetingId ? `meeting-report-draft-${meetingId}` : '';
   const backendTabs = meeting?.tabs || {};
   const allowedActions = Array.isArray(meeting?.allowedActions) ? meeting.allowedActions : [];
   const hasAllowedActions = allowedActions.length > 0;
-  const isEditable = [MEETING_STATUSES.DRAFT, MEETING_STATUSES.CORRECTION_REQUIRED].includes(status);
+  const isCorrectionRequired = status === MEETING_STATUSES.CORRECTION_REQUIRED;
+  const correctionReturnTab = isCorrectionRequired
+    ? getCorrectionTabForMeeting(meeting)
+    : '';
+  const correctionSectionLabel = getCorrectionSectionLabel(correctionReturnTab);
+  const isEditable = status === MEETING_STATUSES.DRAFT
+    || (isCorrectionRequired && ['request', 'attendees'].includes(correctionReturnTab));
   const isActionAllowed = (actions, fallback = false) => {
     const actionList = Array.isArray(actions) ? actions : [actions];
     if (hasAllowedActions) {
@@ -316,15 +418,42 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     return fallback;
   };
   const isWorkflowTabAvailable = (tabKey) => {
+    if (isCorrectionRequired) {
+      return tabKey === correctionReturnTab;
+    }
     if (Object.prototype.hasOwnProperty.call(backendTabs, tabKey)) {
       return Boolean(backendTabs[tabKey]);
     }
     return isTabUnlocked(tabKey, status);
   };
+  const hasGiftCompletionFlag = ['giftsCompleted', 'giftCompleted', 'noGifts', 'giftCompletionState']
+    .some((key) => meeting?.[key] !== undefined && meeting?.[key] !== null && meeting?.[key] !== '');
+  const hasExpenseCompletionFlag = ['expensesCompleted', 'expenseCompleted', 'noExpenses', 'expenseCompletionState']
+    .some((key) => meeting?.[key] !== undefined && meeting?.[key] !== null && meeting?.[key] !== '');
+  const giftSectionComplete = Boolean(meeting?.giftsCompleted || meeting?.noGifts);
+  const expenseSectionComplete = Boolean(meeting?.expensesCompleted || meeting?.noExpenses);
+  const noGiftsSelected = Boolean(
+    meeting?.noGifts
+    || normalizeCompletionState(meeting?.giftCompletionState) === 'NO_GIFTS'
+    || (hasGiftCompletionFlag && giftSectionComplete && giftLines.length === 0)
+  );
+  const noExpensesSelected = Boolean(
+    meeting?.noExpenses
+    || normalizeCompletionState(meeting?.expenseCompletionState) === 'NO_EXPENSES'
+    || (hasExpenseCompletionFlag && expenseSectionComplete && expenseLines.length === 0)
+  );
+  const isAttendanceFinalized = Boolean(meeting?.attendanceFinalized || meeting?.attendanceFinalised);
+  const isFinalReportCorrection = isCorrectionRequired && correctionReturnTab === 'finalReport';
+  const isGiftsAvailable = () => isWorkflowTabAvailable('gifts') && isAttendanceFinalized;
+  const isFinalReportAvailable = () => {
+    if (!isWorkflowTabAvailable('finalReport')) return false;
+    if (hasGiftCompletionFlag && !giftSectionComplete) return false;
+    if (hasExpenseCompletionFlag && !expenseSectionComplete) return false;
+    return true;
+  };
   const isExecutionUnlocked = isWorkflowTabAvailable('execution');
   const canCancelMeeting = [
     MEETING_STATUSES.DRAFT,
-    MEETING_STATUSES.CORRECTION_REQUIRED,
     MEETING_STATUSES.PENDING_APPROVAL,
     MEETING_STATUSES.APPROVED,
   ].includes(status);
@@ -350,7 +479,21 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     setRequestDraft({
       ...hydratedRequest,
       expectedBudget: String(hydratedRequest.expectedBudget || ''),
+      expectedTurnout: String(hydratedRequest.expectedTurnout || ''),
+      companyContribution: String(hydratedRequest.companyContribution ?? ''),
+      dealerContribution: String(hydratedRequest.dealerContribution ?? ''),
     });
+    setPlannedExpenses((data?.plannedExpenses || []).map((item, index) => ({
+      id: item.id || `planned-expense-${index}`,
+      expenseHead: item.expenseHead || item.head || '',
+      amount: item.amount || '',
+    })));
+    setPlannedGifts((data?.plannedGifts || []).map((item, index) => ({
+      id: item.id || `planned-gift-${index}`,
+      giftItem: item.giftItem || item.item || '',
+      quantity: item.quantity || '1',
+      estimatedAmount: item.estimatedAmount || item.amount || '',
+    })));
     setExpectedAttendees(normalizedExpectedAttendees);
     setExecutionDraft(executionDraftData);
     setActualAttendance(normalizedActualAttendees.map(mapAttendeeForExecution));
@@ -367,8 +510,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       meetingSummary: data?.meetingSummary || '',
       keyDiscussionPoints: data?.keyDiscussionPoints || '',
       leadsGenerated: String(data?.leadsGenerated || ''),
+      leadCount: String(data?.leadCount || data?.leadsGenerated || ''),
+      leadDetails: data?.leadDetails || '',
       interestedCustomers: data?.interestedCustomers || '',
       competitorInformation: data?.competitorInformation || '',
+      actualBusinessOutcome: data?.actualBusinessOutcome || '',
       finalRemarks: data?.finalRemarks || '',
     });
     setIsExecutionStarted(Boolean(data?.actualMeetingDate || data?.actualLocation || isExecutionCompleteStatus(currentStatus)));
@@ -394,6 +540,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   }, [fetchMeeting]);
 
   useEffect(() => {
+    if (isCorrectionRequired && correctionReturnTab && activeTab !== correctionReturnTab) {
+      setActiveTab(correctionReturnTab);
+    }
+  }, [activeTab, correctionReturnTab, isCorrectionRequired]);
+
+  useEffect(() => {
     let isMounted = true;
 
     const fetchAttendeeCategories = async () => {
@@ -415,6 +567,62 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     };
   }, [authToken]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchMeetingTypes = async () => {
+      const types = await getMeetingTypes({ authToken });
+      if (isMounted) setMeetingTypes(types);
+    };
+
+    fetchMeetingTypes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchConfig = async () => {
+      const [heads, gifts] = await Promise.all([
+        getExpenseHeads({ authToken }),
+        getGiftItems({ authToken }),
+      ]);
+      if (!isMounted) return;
+      setExpenseHeads(heads);
+      setGiftItems(gifts);
+    };
+
+    fetchConfig();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadLocalReportDraft = async () => {
+      if (!reportDraftStorageKey || [MEETING_STATUSES.REPORT_SUBMITTED, MEETING_STATUSES.CLOSED].includes(status)) return;
+      try {
+        const storedDraft = await AsyncStorage.getItem(reportDraftStorageKey);
+        if (!storedDraft || !isMounted) return;
+        setReportDraft((prev) => ({ ...prev, ...JSON.parse(storedDraft) }));
+      } catch (draftError) {
+        console.warn('Unable to load local report draft:', draftError.message);
+      }
+    };
+
+    loadLocalReportDraft();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [meeting, reportDraftStorageKey, status]);
+
   const attendeeCount = useMemo(() => expectedAttendees.length, [expectedAttendees]);
   const attendedCount = useMemo(
     () => actualAttendance.filter((attendee) => attendee.attended).length,
@@ -428,15 +636,45 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     () => actualAttendance.filter((attendee) => attendee.attended || attendee.present),
     [actualAttendance]
   );
+  const giftItemOptions = useMemo(
+    () => mergeOptions(giftItems, giftLines.map((gift) => gift.giftItem)),
+    [giftItems, giftLines]
+  );
+  const expenseHeadOptions = useMemo(
+    () => mergeOptions(expenseHeads, expenseLines.map((expense) => expense.expenseHead)),
+    [expenseHeads, expenseLines]
+  );
+  const giftTotalQuantity = useMemo(
+    () => giftLines.reduce((sum, gift) => sum + Number(gift.quantity || 0), 0),
+    [giftLines]
+  );
   const expenseTotal = useMemo(
     () => expenseLines.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
     [expenseLines]
   );
+  const plannedGiftLines = useMemo(() => (Array.isArray(meeting?.plannedGifts) ? meeting.plannedGifts : []), [meeting]);
+  const plannedExpenseTotal = useMemo(
+    () => plannedExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    [plannedExpenses]
+  );
+  const plannedGiftTotal = useMemo(
+    () => plannedGifts.reduce((sum, item) => sum + Number(item.estimatedAmount || 0), 0),
+    [plannedGifts]
+  );
   const expectedBudget = Number(request.expectedBudget || 0);
+  const expectedTurnoutValue = Number(request.expectedTurnout || request.expectedAttendeeCount || expectedAttendees.length || 0);
   const expensesExceedBudget = expenseTotal > expectedBudget;
 
   const updateRequest = (field, value) => {
     setRequestDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updatePlannedExpense = (field, value) => {
+    setPlannedExpenseDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updatePlannedGift = (field, value) => {
+    setPlannedGiftDraft((prev) => ({ ...prev, [field]: value }));
   };
 
   const updateExecution = (field, value) => {
@@ -492,6 +730,8 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       ['state', 'state'],
       ['location', 'location'],
       ['purpose', 'purpose'],
+      ['expectedBusinessImpact', 'expected business impact'],
+      ['expectedTurnout', 'expected turnout'],
       ['expectedBudget', 'expected budget'],
     ];
 
@@ -501,6 +741,30 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
     if (missingFields.length > 0) {
       Alert.alert('Missing details', `Please add ${missingFields.join(', ')}.`);
+      return false;
+    }
+
+    const selectedTypeIsActive = meetingTypes.some(
+      (type) => String(type).toLowerCase() === String(requestDraft.meetingType).toLowerCase()
+    );
+    if (!selectedTypeIsActive) {
+      Alert.alert('Invalid meeting type', 'Please select an active meeting type from the list.');
+      return false;
+    }
+
+    if (['dealer', 'counter'].some((type) => String(requestDraft.meetingType || '').toLowerCase().includes(type)) && !requestDraft.storeId) {
+      Alert.alert('Dealer / shop required', 'Select a dealer/shop from the customer database for Dealer or Counter meetings.');
+      return false;
+    }
+
+    const expectedTurnout = Number(requestDraft.expectedTurnout);
+    if (Number.isNaN(expectedTurnout) || expectedTurnout <= 0) {
+      Alert.alert('Invalid turnout', 'Expected turnout should be greater than zero.');
+      return false;
+    }
+
+    if (expectedTurnout < expectedAttendees.length) {
+      Alert.alert('Invalid turnout', 'Expected turnout cannot be lower than named attendees added.');
       return false;
     }
 
@@ -522,9 +786,51 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     return true;
   };
 
-  const saveMeeting = async (showSuccess = true) => {
-    if (!validateRequest()) return false;
+  const validatePlanForSubmit = () => {
+    if (plannedExpenses.length === 0) {
+      Alert.alert('Planned expenses required', 'Add at least one planned expense before submitting for approval.');
+      return false;
+    }
 
+    if (plannedGifts.length === 0) {
+      Alert.alert('Planned gifts required', 'Add at least one planned gift/material before submitting for approval.');
+      return false;
+    }
+
+    const missingContributions = [
+      ['companyContribution', 'company contribution'],
+      ['dealerContribution', 'dealer contribution'],
+    ]
+      .filter(([field]) => !String(requestDraft[field] ?? '').trim())
+      .map(([, label]) => label);
+
+    if (missingContributions.length > 0) {
+      Alert.alert('Contribution split required', `Please add ${missingContributions.join(' and ')}. Use 0 if not applicable.`);
+      return false;
+    }
+
+    const draftExpectedBudget = Number(requestDraft.expectedBudget || 0);
+    const companyContribution = Number(requestDraft.companyContribution || 0);
+    const dealerContribution = Number(requestDraft.dealerContribution || 0);
+
+    if ([companyContribution, dealerContribution].some((amount) => Number.isNaN(amount) || amount < 0)) {
+      Alert.alert('Invalid contribution', 'Company and dealer contribution should be valid non-negative amounts.');
+      return false;
+    }
+
+    const contributionTotal = companyContribution + dealerContribution;
+    if (Math.abs(contributionTotal - draftExpectedBudget) > 0.009) {
+      Alert.alert(
+        'Budget mismatch',
+        `Company + dealer contribution must equal expected budget. Expected Rs. ${draftExpectedBudget}, currently Rs. ${contributionTotal}.`
+      );
+      return false;
+    }
+
+    return true;
+  };
+
+  const saveMeeting = async (showSuccess = true) => {
     try {
       setIsSaving(true);
       await editMeeting({
@@ -533,10 +839,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         payload: {
           request: {
             ...requestDraft,
-            expectedBudget: Number(requestDraft.expectedBudget || 0),
-            expectedAttendeeCount: expectedAttendees.length,
+            expectedTurnout: requestDraft.expectedTurnout,
+            namedAttendeeCount: expectedAttendees.length,
           },
           expectedAttendees: expectedAttendees.map(({ id, ...attendee }) => attendee),
+          plannedExpenses: plannedExpenses.map(({ id, ...item }) => item),
+          plannedGifts: plannedGifts.map(({ id, ...item }) => item),
         },
       });
       if (showSuccess) {
@@ -554,15 +862,30 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   };
 
   const submitForApproval = async () => {
+    if (isFinalReportCorrection) {
+      setActiveTab('finalReport');
+      Alert.alert('Final report correction', 'Update the Final Report tab and resubmit from there.');
+      return;
+    }
+
+    if (!validateRequest()) return;
+    if (!validatePlanForSubmit()) return;
     const saved = await saveMeeting(false);
     if (!saved) return;
 
     try {
       setIsSaving(true);
-      await submitMeeting({ authToken, meetingId });
-      Alert.alert('Submitted', 'Meeting request submitted for approval.');
+      let nextTab = 'request';
+      if (status === MEETING_STATUSES.CORRECTION_REQUIRED) {
+        nextTab = correctionReturnTab || 'request';
+        await resubmitMeetingCorrection({ authToken, meetingId });
+        Alert.alert('Submitted', 'Meeting correction resubmitted.');
+      } else {
+        await submitMeeting({ authToken, meetingId });
+        Alert.alert('Submitted', 'Meeting request submitted for approval.');
+      }
       await fetchMeeting();
-      setActiveTab('request');
+      setActiveTab(nextTab);
     } catch (submitError) {
       console.error('Error submitting meeting:', submitError.message);
       Alert.alert('Error', 'Unable to submit meeting.');
@@ -591,6 +914,73 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const copyToNewRequest = () => {
+    navigation.navigate('NewMeeting', {
+      authToken,
+      initialRequest: {
+        ...request,
+        meetingDate: todayString(),
+        meetingTime: '',
+        remarks: '',
+      },
+      initialAttendees: expectedAttendees.map((attendee) => ({
+        name: attendee.name,
+        mobile: attendee.mobile,
+        email: attendee.email,
+        category: attendee.category,
+        cityArea: attendee.cityArea,
+        company: attendee.company,
+        id: `copy-${attendee.mobile || attendee.name || Date.now()}`,
+      })),
+    });
+  };
+
+  const addPlannedExpense = () => {
+    const amount = Number(plannedExpenseDraft.amount || 0);
+    if (!plannedExpenseDraft.expenseHead || Number.isNaN(amount) || amount <= 0) {
+      Alert.alert('Invalid planned expense', 'Select an expense head and enter a valid amount.');
+      return;
+    }
+
+    setPlannedExpenses((prev) => [
+      ...prev,
+      {
+        id: `planned-expense-${Date.now()}`,
+        expenseHead: plannedExpenseDraft.expenseHead,
+        amount,
+      },
+    ]);
+    setPlannedExpenseDraft(initialPlannedExpense);
+  };
+
+  const removePlannedExpense = (id) => {
+    setPlannedExpenses((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const addPlannedGift = () => {
+    const quantity = Number(plannedGiftDraft.quantity || 0);
+    const estimatedAmount = Number(plannedGiftDraft.estimatedAmount || 0);
+    if (!plannedGiftDraft.giftItem || Number.isNaN(quantity) || quantity <= 0 || Number.isNaN(estimatedAmount) || estimatedAmount <= 0) {
+      Alert.alert('Invalid planned gift', 'Select a gift item and enter valid quantity and estimated amount.');
+      return;
+    }
+
+    setPlannedGifts((prev) => [
+      ...prev,
+      {
+        id: `planned-gift-${Date.now()}`,
+        giftItem: plannedGiftDraft.giftItem,
+        quantity,
+        estimatedAmount,
+      },
+    ]);
+    setPlannedGiftDraft(initialPlannedGift);
+  };
+
+  const removePlannedGift = (id) => {
+    setPlannedGifts((prev) => prev.filter((item) => item.id !== id));
   };
 
   const addAttendee = () => {
@@ -654,6 +1044,44 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       setHasLoadedAttendeeMaster(true);
       setIsLoadingAttendeeMaster(false);
     }
+  };
+
+  const fetchDealerShops = async (search = '') => {
+    try {
+      setIsLoadingDealers(true);
+      const employeeId = await AsyncStorage.getItem('employeeId');
+      const data = await getDealerShops({ authToken, employeeId, search });
+      setDealerShops(data);
+    } catch (dealerError) {
+      console.warn('Unable to fetch dealer/shop list:', dealerError.message);
+    } finally {
+      setHasLoadedDealers(true);
+      setIsLoadingDealers(false);
+    }
+  };
+
+  const openDealerPicker = async () => {
+    setIsDealerPickerOpen(true);
+    if (!hasLoadedDealers) {
+      await fetchDealerShops();
+    }
+  };
+
+  const selectDealerShop = (shop) => {
+    setRequestDraft((prev) => ({
+      ...prev,
+      storeId: shop.storeId,
+      storeName: shop.storeName,
+    }));
+    setIsDealerPickerOpen(false);
+  };
+
+  const openCustomerCreation = () => {
+    setIsDealerPickerOpen(false);
+    navigation.navigate('Customer', {
+      screen: 'CustomerListScreen',
+      params: { openCreateCustomer: true, source: 'meeting' },
+    });
   };
 
   const useCurrentLocation = async () => {
@@ -787,7 +1215,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         return {
           id: attendanceId,
           present: Boolean(attendee.attended),
-          attendanceSource: 'MANUAL',
+          attendanceSource: 'FINAL_MANUAL',
           remarks: attendee.attended ? 'Present' : 'Absent',
         };
       })
@@ -802,20 +1230,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
     try {
       setIsSaving(true);
-      await startMeetingExecution({
-        authToken,
-        meetingId,
-        payload: {
-          actualMeetingDate: executionDraft.actualMeetingDate,
-          actualMeetingTime: executionDraft.actualMeetingTime,
-          actualLocation: executionDraft.actualLocation,
-          executionRemarks: 'Meeting execution submitted from mobile',
-        },
-      });
 
+      const savedWalkInPayload = [];
       for (const attendee of walkInAttendees) {
         if (String(attendee.id || '').startsWith('walk-in-')) {
-          await createWalkInAttendance({
+          const savedWalkIn = await createWalkInAttendance({
             authToken,
             meetingId,
             attendee: {
@@ -825,16 +1244,39 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               remarks: 'Walk-in attendee',
             },
           });
+          const savedWalkInId = savedWalkIn.meetingAttendeeId || savedWalkIn.id;
+          if (savedWalkInId) {
+            savedWalkInPayload.push({
+              id: savedWalkInId,
+              present: true,
+              attendanceSource: 'FINAL_MANUAL',
+              remarks: 'Walk-in attendee',
+            });
+          }
+        } else {
+          const existingWalkInId = attendee.meetingAttendeeId || attendee.id;
+          if (existingWalkInId) {
+            savedWalkInPayload.push({
+              id: existingWalkInId,
+              present: true,
+              attendanceSource: 'FINAL_MANUAL',
+              remarks: attendee.remarks || 'Walk-in attendee',
+            });
+          }
         }
       }
 
-      if (expectedAttendancePayload.length > 0) {
-        await markMeetingAttendance({
-          authToken,
-          meetingId,
-          attendees: expectedAttendancePayload,
-        });
-      }
+      await finaliseMeetingAttendance({
+        authToken,
+        meetingId,
+        payload: {
+          actualMeetingDate: executionDraft.actualMeetingDate,
+          actualMeetingTime: executionDraft.actualMeetingTime,
+          actualLocation: executionDraft.actualLocation,
+          executionRemarks: 'Meeting execution and attendance finalised from mobile',
+          attendees: [...expectedAttendancePayload, ...savedWalkInPayload],
+        },
+      });
 
       setIsExecutionSubmitted(true);
       setIsExecutionStarted(true);
@@ -866,7 +1308,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     }
 
     const existingGiftKeys = new Set(
-      giftLines.map((gift) => `${String(gift.meetingAttendeeId || '')}|${String(gift.giftItem || '').trim().toLowerCase()}`)
+      giftLines.map((gift) => `${getGiftLineAttendeeId(gift)}|${String(gift.giftItem || '').trim().toLowerCase()}`)
     );
     const newGiftLines = selectedAttendees
       .map((attendee) => ({
@@ -891,9 +1333,26 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     setGiftDraft({ ...emptyGiftDraft });
   };
 
-  const removeGiftLine = (index) => {
-    setGiftLines((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
-    setHasGiftChanges(true);
+  const removeGiftLine = async (index) => {
+    const gift = giftLines[index];
+    const giftId = getGiftLineId(gift);
+
+    if (!giftId) {
+      setGiftLines((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+      setHasGiftChanges(true);
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      await deleteMeetingGift({ authToken, meetingId, giftId });
+      await fetchMeeting();
+    } catch (giftError) {
+      console.error('Error deleting gift:', giftError.response?.data || giftError.message);
+      Alert.alert('Error', 'Unable to delete this gift line.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const submitGifts = async () => {
@@ -907,12 +1366,17 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       await saveMeetingGifts({
         authToken,
         meetingId,
-        gifts: giftLines.map((gift) => ({
-          meetingAttendeeId: Number(gift.meetingAttendeeId),
-          giftItem: gift.giftItem,
-          quantity: Number(gift.quantity || 1),
-          remarks: gift.remarks,
-        })),
+        gifts: giftLines.map((gift) => {
+          const attendeeId = Number(getGiftLineAttendeeId(gift));
+          const giftId = getGiftLineId(gift);
+          return {
+            ...(giftId ? { id: giftId, giftId } : {}),
+            ...(Number.isFinite(attendeeId) && attendeeId > 0 ? { meetingAttendeeId: attendeeId } : {}),
+            giftItem: gift.giftItem,
+            quantity: Number(gift.quantity || 1),
+            remarks: gift.remarks,
+          };
+        }),
       });
       Alert.alert('Saved', 'Gift issues saved.');
       await fetchMeeting();
@@ -926,10 +1390,43 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     }
   };
 
+  const submitNoGifts = async () => {
+    try {
+      setIsSaving(true);
+      await markNoGifts({ authToken, meetingId, remarks: 'No gifts issued from mobile' });
+      Alert.alert('Saved', 'Marked as no gifts issued.');
+      await fetchMeeting();
+      setHasGiftChanges(false);
+      setActiveTab('expenses');
+    } catch (giftError) {
+      console.error('Error marking no gifts:', giftError.response?.data || giftError.message);
+      Alert.alert('Error', 'Unable to mark no gifts.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const addExpenseLine = () => {
     const amount = Number(expenseDraft.amount || 0);
     if (!expenseDraft.expenseHead || Number.isNaN(amount) || amount <= 0) {
       Alert.alert('Invalid expense', 'Select an expense head and enter a valid amount.');
+      return;
+    }
+
+    const paidBy = expenseDraft.paidBy || 'COMPANY';
+    const companyAmount = paidBy === 'COMPANY'
+      ? amount
+      : paidBy === 'SHARED'
+        ? Number(expenseDraft.companyAmount || 0)
+        : 0;
+    const dealerAmount = paidBy === 'DEALER'
+      ? amount
+      : paidBy === 'SHARED'
+        ? Number(expenseDraft.dealerAmount || 0)
+        : 0;
+
+    if (paidBy === 'SHARED' && (companyAmount <= 0 || dealerAmount <= 0 || companyAmount + dealerAmount !== amount)) {
+      Alert.alert('Invalid split', 'For shared expenses, company and dealer amounts must be greater than zero and equal the total amount.');
       return;
     }
 
@@ -938,6 +1435,9 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       {
         expenseHead: expenseDraft.expenseHead,
         amount,
+        paidBy,
+        companyAmount,
+        dealerAmount,
         expenseDate: expenseDraft.expenseDate || todayString(),
         remarks: expenseDraft.remarks,
       },
@@ -946,6 +1446,27 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       ...emptyExpenseDraft,
       expenseDate: expenseDraft.expenseDate || todayString(),
     });
+  };
+
+  const removeExpenseLine = async (index) => {
+    const expense = expenseLines[index];
+    const expenseId = getExpenseLineId(expense);
+
+    if (!expenseId) {
+      setExpenseLines((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      await deleteMeetingExpense({ authToken, meetingId, expenseId });
+      await fetchMeeting();
+    } catch (expenseError) {
+      console.error('Error deleting expense:', expenseError.response?.data || expenseError.message);
+      Alert.alert('Error', 'Unable to delete this expense line.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const submitExpenses = async () => {
@@ -966,9 +1487,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         meetingId,
         payload: {
           remarks: expenseRemarks,
+          expenseVarianceRemarks: expenseRemarks,
           expenses: expenseLines.map((expense) => ({
+            ...(getExpenseLineId(expense) ? { id: getExpenseLineId(expense), expenseId: getExpenseLineId(expense) } : {}),
             expenseHead: expense.expenseHead,
             amount: Number(expense.amount || 0),
+            paidBy: expense.paidBy || 'COMPANY',
+            companyAmount: Number(expense.companyAmount || 0),
+            dealerAmount: Number(expense.dealerAmount || 0),
             expenseDate: expense.expenseDate || todayString(),
             remarks: expense.remarks,
           })),
@@ -985,17 +1511,58 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     }
   };
 
+  const submitNoExpenses = async () => {
+    try {
+      setIsSaving(true);
+      await markNoExpenses({ authToken, meetingId, remarks: expenseRemarks || 'No expenses submitted from mobile' });
+      Alert.alert('Submitted', 'Marked as no expenses.');
+      await fetchMeeting();
+      setActiveTab('finalReport');
+    } catch (expenseError) {
+      console.error('Error marking no expenses:', expenseError.response?.data || expenseError.message);
+      Alert.alert('Error', 'Unable to mark no expenses.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const saveReportDraft = async () => {
+    if (!reportDraftStorageKey) return;
+
+    try {
+      await AsyncStorage.setItem(reportDraftStorageKey, JSON.stringify(reportDraft));
+      Alert.alert('Draft saved', 'Report draft saved on this device.');
+    } catch (draftError) {
+      console.error('Error saving report draft:', draftError.message);
+      Alert.alert('Error', 'Unable to save report draft.');
+    }
+  };
+
   const submitFinalReport = async () => {
-    if (!reportDraft.meetingSummary.trim() || !reportDraft.finalRemarks.trim()) {
-      Alert.alert('Report details required', 'Add meeting summary and final remarks before submitting.');
+    if (!reportDraft.meetingSummary.trim() || !reportDraft.actualBusinessOutcome.trim()) {
+      Alert.alert('Report details required', 'Add meeting summary and actual business outcome before submitting.');
       return;
     }
 
+    const reportPayload = {
+      ...reportDraft,
+      leadsGenerated: reportDraft.leadCount || reportDraft.leadsGenerated || '',
+      leadCount: Number(reportDraft.leadCount || reportDraft.leadsGenerated || 0),
+    };
+
     try {
       setIsSaving(true);
-      await submitMeetingReport({ authToken, meetingId, payload: reportDraft });
-      Alert.alert('Submitted', 'Final meeting report submitted.');
+      if (isFinalReportCorrection) {
+        await resubmitFinalReportCorrection({ authToken, meetingId, payload: reportPayload });
+      } else {
+        await submitMeetingReport({ authToken, meetingId, payload: reportPayload });
+      }
+      if (reportDraftStorageKey) {
+        await AsyncStorage.removeItem(reportDraftStorageKey);
+      }
+      Alert.alert('Submitted', isFinalReportCorrection ? 'Final report correction resubmitted.' : 'Final meeting report submitted.');
       await fetchMeeting();
+      setActiveTab('finalReport');
     } catch (reportError) {
       console.error('Error submitting final report:', reportError.response?.data || reportError.message);
       Alert.alert('Error', 'Unable to submit final report.');
@@ -1047,13 +1614,49 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const renderRequestTab = () => (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>Meeting Request</Text>
+      {status === MEETING_STATUSES.CORRECTION_REQUIRED ? (
+        <View style={styles.correctionPanel}>
+          <View style={styles.correctionIcon}>
+            <Ionicons name="construct-outline" size={20} color="#EA580C" />
+          </View>
+          <View style={styles.correctionTextWrap}>
+            <Text style={styles.correctionTitle}>Correction Required{meeting?.correctionStage ? ` - ${meeting.correctionStage}` : ''}</Text>
+            <Text style={styles.correctionText}>{meeting?.correctionRemarks || 'Please update the requested section and resubmit.'}</Text>
+            <Text style={styles.correctionMeta}>Affected section: {correctionSectionLabel}</Text>
+            {meeting?.correctionRequestedBy || meeting?.correctionRequestedAt ? (
+              <Text style={styles.correctionMeta}>
+                {[meeting.correctionRequestedBy, meeting.correctionRequestedAt].filter(Boolean).join(' - ')}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+      {status === MEETING_STATUSES.REJECTED ? (
+        <View style={styles.negativePanel}>
+          <View style={styles.correctionIcon}>
+            <Ionicons name="close-circle-outline" size={20} color="#DC2626" />
+          </View>
+          <View style={styles.correctionTextWrap}>
+            <Text style={styles.negativeTitle}>Rejected</Text>
+            <Text style={styles.correctionText}>{meeting?.rejectionReason || 'No rejection reason provided.'}</Text>
+            {meeting?.rejectedBy || meeting?.rejectedAt ? (
+              <Text style={styles.correctionMeta}>{[meeting.rejectedBy, meeting.rejectedAt].filter(Boolean).join(' - ')}</Text>
+            ) : null}
+            <TouchableOpacity style={styles.copyRequestButton} onPress={copyToNewRequest}>
+              <Ionicons name="copy-outline" size={15} color="#FFFFFF" />
+              <Text style={styles.copyRequestText}>Copy to New Request</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
       {isEditable ? (
         <>
-          <Field
+          <SelectField
             label="Meeting Type"
+            placeholder="Select meeting type"
+            options={meetingTypes}
             value={requestDraft.meetingType}
-            onChangeText={(value) => updateRequest('meetingType', value)}
-            placeholder="Counter, Dealer, Mason, Contractor, etc."
+            onSelect={(value) => updateRequest('meetingType', value)}
           />
           <View style={styles.twoColumn}>
             <View style={styles.halfField}>
@@ -1072,13 +1675,175 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             </View>
           </View>
           <LocationField value={requestDraft.location} onChangeText={(value) => updateRequest('location', value)} onUseCurrentLocation={useCurrentLocation} isLocating={isLocating} />
-          <Field label="Dealer / Customer Reference" value={requestDraft.referenceName} onChangeText={(value) => updateRequest('referenceName', value)} placeholder="Optional" />
+          <View style={styles.field}>
+            <Text style={styles.label}>Dealer / Shop</Text>
+            <TouchableOpacity style={styles.dealerSelectButton} onPress={openDealerPicker}>
+              <View style={styles.dealerSelectIcon}>
+                <Ionicons name="storefront-outline" size={18} color="#4F46E5" />
+              </View>
+              <View style={styles.dealerSelectTextWrap}>
+                <Text style={[styles.dealerSelectTitle, !requestDraft.storeName && styles.dealerSelectPlaceholder]} numberOfLines={1}>
+                  {requestDraft.storeName || 'Select dealer / shop'}
+                </Text>
+                <Text style={styles.dealerSelectSubtitle}>Linked to customer database</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+            </TouchableOpacity>
+          </View>
+          <Field label="Additional Customer Reference" value={requestDraft.referenceName} onChangeText={(value) => updateRequest('referenceName', value)} placeholder="Optional extra context" />
           <Field label="Purpose / Objective" value={requestDraft.purpose} onChangeText={(value) => updateRequest('purpose', value)} placeholder="Purpose" multiline />
+          <Field label="Expected Business Impact" value={requestDraft.expectedBusinessImpact} onChangeText={(value) => updateRequest('expectedBusinessImpact', value)} placeholder="Expected business result" multiline />
+          <Field label="Expected Turnout" value={requestDraft.expectedTurnout} onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))} placeholder="Planned total attendees" keyboardType="numeric" />
           <Field label="Expected Budget" value={requestDraft.expectedBudget} onChangeText={(value) => updateRequest('expectedBudget', value)} placeholder="Amount" keyboardType="numeric" />
-          <Field label="Expected Gifts / Materials" value={requestDraft.expectedMaterials} onChangeText={(value) => updateRequest('expectedMaterials', value)} placeholder="Caps, brochures, samples, etc." multiline />
+          <Field label="Gift / Material Notes" value={requestDraft.expectedMaterials} onChangeText={(value) => updateRequest('expectedMaterials', value)} placeholder="Optional notes, e.g. brochures or samples to carry" multiline />
+          <View style={styles.planCard}>
+            <View style={styles.planCardHeader}>
+              <View>
+                <Text style={styles.planCardTitle}>Budget Contribution</Text>
+                <Text style={styles.planCardSubtitle}>Company + dealer must equal expected budget.</Text>
+              </View>
+              <Text style={styles.planBadge}>Rs. {Number(requestDraft.expectedBudget || 0)}</Text>
+            </View>
+            <View style={styles.twoColumn}>
+              <View style={styles.halfField}>
+                <Field
+                  label="Company Contribution"
+                  value={requestDraft.companyContribution}
+                  onChangeText={(value) => updateRequest('companyContribution', value.replace(/[^\d.]/g, ''))}
+                  placeholder="Company"
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.halfField}>
+                <Field
+                  label="Dealer Contribution"
+                  value={requestDraft.dealerContribution}
+                  onChangeText={(value) => updateRequest('dealerContribution', value.replace(/[^\d.]/g, ''))}
+                  placeholder="Dealer"
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+            <Field
+              label="Budget Remarks"
+              value={requestDraft.budgetRemarks}
+              onChangeText={(value) => updateRequest('budgetRemarks', value)}
+              placeholder="Contribution notes"
+              multiline
+            />
+          </View>
+
+          <View style={styles.planCard}>
+            <View style={styles.planCardHeader}>
+              <View>
+                <Text style={styles.planCardTitle}>Planned Expenses</Text>
+                <Text style={styles.planCardSubtitle}>Required before submit for approval.</Text>
+              </View>
+              <Text style={styles.planBadge}>Rs. {plannedExpenseTotal}</Text>
+            </View>
+            <SelectField
+              label="Expense Head"
+              placeholder="Select expense head"
+              options={expenseHeadOptions}
+              value={plannedExpenseDraft.expenseHead}
+              onSelect={(value) => updatePlannedExpense('expenseHead', value)}
+            />
+            <Field
+              label="Amount"
+              value={plannedExpenseDraft.amount}
+              onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
+              placeholder="Planned amount"
+              keyboardType="numeric"
+            />
+            <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
+              <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+              <Text style={styles.secondaryButtonText}>Add Planned Expense</Text>
+            </TouchableOpacity>
+            {plannedExpenses.length === 0 ? (
+              <Text style={styles.planEmptyText}>No planned expenses added.</Text>
+            ) : plannedExpenses.map((item) => (
+              <View key={item.id} style={styles.planLine}>
+                <View style={styles.planLineMain}>
+                  <Text style={styles.planLineTitle}>{item.expenseHead}</Text>
+                  <Text style={styles.planLineMeta}>Rs. {item.amount}</Text>
+                </View>
+                <TouchableOpacity style={styles.planDeleteButton} onPress={() => removePlannedExpense(item.id)}>
+                  <Ionicons name="close-circle" size={20} color="#EF4444" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.planCard}>
+            <View style={styles.planCardHeader}>
+              <View>
+                <Text style={styles.planCardTitle}>Planned Gifts / Materials</Text>
+                <Text style={styles.planCardSubtitle}>Enter item, quantity, and estimated amount.</Text>
+              </View>
+              <Text style={styles.planBadge}>Rs. {plannedGiftTotal}</Text>
+            </View>
+            <SelectField
+              label="Gift Item"
+              placeholder="Select gift item"
+              options={giftItemOptions}
+              value={plannedGiftDraft.giftItem}
+              onSelect={(value) => updatePlannedGift('giftItem', value)}
+            />
+            <View style={styles.twoColumn}>
+              <View style={styles.halfField}>
+                <Field
+                  label="Quantity"
+                  value={plannedGiftDraft.quantity}
+                  onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
+                  placeholder="Qty"
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.halfField}>
+                <Field
+                  label="Estimated Amount"
+                  value={plannedGiftDraft.estimatedAmount}
+                  onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
+                  placeholder="Amount"
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+            <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
+              <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+              <Text style={styles.secondaryButtonText}>Add Planned Gift</Text>
+            </TouchableOpacity>
+            {plannedGifts.length === 0 ? (
+              <Text style={styles.planEmptyText}>No planned gifts/materials added.</Text>
+            ) : plannedGifts.map((item) => (
+              <View key={item.id} style={styles.planLine}>
+                <View style={styles.planLineMain}>
+                  <Text style={styles.planLineTitle}>{item.giftItem} x {item.quantity}</Text>
+                  <Text style={styles.planLineMeta}>Estimated Rs. {item.estimatedAmount}</Text>
+                </View>
+                <TouchableOpacity style={styles.planDeleteButton} onPress={() => removePlannedGift(item.id)}>
+                  <Ionicons name="close-circle" size={20} color="#EF4444" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
           <Field label="Remarks" value={requestDraft.remarks} onChangeText={(value) => updateRequest('remarks', value)} placeholder="Remarks" multiline />
           <PrimaryButton label="Save Draft Changes" onPress={saveMeeting} />
-          <PrimaryButton label="Submit For Approval" onPress={submitForApproval} color="#10B981" />
+          <PrimaryButton
+            label={status === MEETING_STATUSES.CORRECTION_REQUIRED ? 'Resubmit Correction' : 'Submit For Approval'}
+            onPress={submitForApproval}
+            color="#10B981"
+          />
+          <MeetingDealerShopPicker
+            visible={isDealerPickerOpen}
+            shops={dealerShops}
+            isLoading={isLoadingDealers}
+            selectedStoreId={requestDraft.storeId}
+            onClose={() => setIsDealerPickerOpen(false)}
+            onSearch={fetchDealerShops}
+            onSelect={selectDealerShop}
+            onAddNew={openCustomerCreation}
+          />
         </>
       ) : (
         <>
@@ -1103,14 +1868,41 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
           <View style={styles.detailGroupCard}>
             <Text style={styles.groupCardTitle}>Meeting Objectives</Text>
+            <InfoRow label="Dealer / Shop" value={request.storeName || 'No dealer/shop linked'} icon="storefront-outline" />
             <InfoRow label="Reference Name" value={request.referenceName || 'No reference added'} icon="person-circle-outline" />
             <InfoRow label="Purpose / Objective" value={request.purpose || 'No purpose added'} icon="flag-outline" />
+            <InfoRow label="Expected Business Impact" value={request.expectedBusinessImpact || 'No expected impact added'} icon="trending-up-outline" />
           </View>
 
           <View style={styles.detailGroupCard}>
             <Text style={styles.groupCardTitle}>Resources & Budget</Text>
+            <InfoRow label="Expected Turnout" value={`${request.expectedTurnout || 0}`} icon="people-outline" />
+            <InfoRow label="Named Attendees Added" value={`${expectedAttendees.length}`} icon="person-add-outline" />
             <InfoRow label="Expected Budget" value={`Rs. ${request.expectedBudget || 0}`} icon="wallet-outline" />
-            <InfoRow label="Expected Gifts / Materials" value={request.expectedMaterials || 'None requested'} icon="gift-outline" />
+            <InfoRow label="Gift / Material Notes" value={request.expectedMaterials || 'No extra notes'} icon="document-text-outline" />
+            <View style={styles.infoBlock}>
+              <View style={styles.infoIcon}>
+                <Ionicons name="gift-outline" size={16} color="#4F46E5" />
+              </View>
+              <View style={styles.infoTextWrap}>
+                <Text style={styles.infoLabel}>Planned Gifts / Materials</Text>
+                {plannedGiftLines.length === 0 ? (
+                  <Text style={styles.infoValue}>No planned gifts added</Text>
+                ) : plannedGiftLines.map((gift, index) => (
+                  <View key={`${gift.giftItem || gift.item || 'gift'}-${index}`} style={styles.summaryLine}>
+                    <View style={styles.summaryLineIcon}>
+                      <Ionicons name="gift-outline" size={16} color="#4F46E5" />
+                    </View>
+                    <View style={styles.summaryLineText}>
+                      <Text style={styles.summaryLineTitle}>
+                        {gift.giftItem || gift.item || 'Gift item'} x {gift.quantity || 0}
+                      </Text>
+                      <Text style={styles.summaryLineMeta}>Estimated Rs. {gift.estimatedAmount || gift.amount || 0}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
           </View>
 
           {request.remarks ? (
@@ -1236,7 +2028,8 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
   const renderAttendeesTab = () => (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Expected Attendees ({attendeeCount})</Text>
+      <Text style={styles.sectionTitle}>Named Expected Attendees ({attendeeCount})</Text>
+      <Text style={styles.helperText}>Expected turnout: {expectedTurnoutValue || 0}</Text>
       {isEditable && (
         <>
           <TouchableOpacity style={styles.existingButton} onPress={openAttendeePicker}>
@@ -1284,7 +2077,10 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   );
 
   const renderExecutionTab = () => {
-    const canSubmitExecution = isActionAllowed(['EXECUTE', 'MARK_ATTENDANCE'], status === MEETING_STATUSES.APPROVED);
+    const canSubmitExecution = isActionAllowed(
+      ['EXECUTE', 'MARK_ATTENDANCE'],
+      status === MEETING_STATUSES.APPROVED || (isCorrectionRequired && correctionReturnTab === 'execution')
+    );
     const canAddWalkIns = request.allowWalkInAttendees !== false && !isExecutionSubmitted && canSubmitExecution;
     const executionStateLabel = isExecutionSubmitted ? 'Submitted' : isExecutionStarted ? 'In Progress' : 'Ready';
     const executionStateColor = isExecutionSubmitted ? '#16A34A' : isExecutionStarted ? '#7C3AED' : '#2563EB';
@@ -1383,8 +2179,8 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
             <View style={styles.executionStatsRow}>
               <View style={styles.executionStatCard}>
-                <Text style={styles.executionStatValue}>{expectedAttendees.length}</Text>
-                <Text style={styles.executionStatLabel}>Expected</Text>
+                <Text style={styles.executionStatValue}>{expectedTurnoutValue || expectedAttendees.length}</Text>
+                <Text style={styles.executionStatLabel}>Turnout</Text>
               </View>
               <View style={styles.executionStatCard}>
                 <Text style={styles.executionStatValue}>{attendedCount}</Text>
@@ -1479,14 +2275,18 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   };
 
   const renderGiftsTab = () => {
-    const canSubmitGifts = isActionAllowed(['ISSUE_GIFTS', 'SAVE_GIFTS'], status === MEETING_STATUSES.EXECUTED);
+    const noGiftsMarked = noGiftsSelected;
+    const canSubmitGifts = isGiftsAvailable() && !noGiftsMarked && isActionAllowed(
+      ['ISSUE_GIFTS', 'SAVE_GIFTS'],
+      status === MEETING_STATUSES.EXECUTED || (isCorrectionRequired && correctionReturnTab === 'gifts')
+    );
     const selectedRecipientIds = giftDraft.meetingAttendeeIds || [];
     const allPresentSelected = presentAttendees.length > 0 && selectedRecipientIds.length === presentAttendees.length;
-    const canAddGiftIssue = canSubmitGifts && giftLines.length === 0;
+    const canAddGiftIssue = canSubmitGifts;
     const hasSavedGiftLines = canSubmitGifts && giftLines.length > 0 && !hasGiftChanges;
     const canSubmitGiftChanges = canSubmitGifts && giftLines.length > 0 && hasGiftChanges;
 
-    if (!isWorkflowTabAvailable('gifts')) {
+    if (!isGiftsAvailable()) {
       return (
         <View style={styles.section}>
           <View style={styles.lockedPanel}>
@@ -1494,7 +2294,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               <Ionicons name="lock-closed-outline" size={24} color="#64748B" />
             </View>
             <Text style={styles.lockedTitle}>Gifts Locked</Text>
-            <Text style={styles.lockedText}>Gifts unlock after meeting execution and actual attendance.</Text>
+            <Text style={styles.lockedText}>Gifts unlock only after the backend confirms attendance is finalised.</Text>
           </View>
         </View>
       );
@@ -1503,6 +2303,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     return (
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Gift Issue</Text>
+        {noGiftsMarked ? (
+          <View style={styles.savedStatePanel}>
+            <Ionicons name="ban-outline" size={18} color="#7C3AED" />
+            <Text style={styles.savedStateText}>No gifts were distributed for this meeting.</Text>
+          </View>
+        ) : null}
         <View style={styles.detailGroupCard}>
           <View style={styles.cardTitleRow}>
             <Text style={[styles.groupCardTitle, styles.groupCardTitleInline]}>Eligible Attendees</Text>
@@ -1523,7 +2329,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 <TouchableOpacity
                   key={attendeeId}
                   style={[styles.recipientCard, isSelected && styles.recipientCardActive]}
-                  onPress={() => canAddGiftIssue && toggleGiftRecipient(attendeeId)}
+                  onPress={() => toggleGiftRecipient(attendeeId)}
                   activeOpacity={0.85}
                   disabled={!canAddGiftIssue}
                 >
@@ -1544,11 +2350,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               <Text style={[styles.groupCardTitle, styles.groupCardTitleInline]}>Gift Details</Text>
               <Text style={styles.executionCountText}>{selectedRecipientIds.length} selected</Text>
             </View>
-            <Field
+            <SelectField
               label="Gift / Item"
+              placeholder="Select gift item"
+              options={giftItemOptions}
               value={giftDraft.giftItem}
-              onChangeText={(value) => updateGiftDraft('giftItem', value)}
-              placeholder="Gift item name"
+              onSelect={(value) => updateGiftDraft('giftItem', value)}
             />
             <Field
               label="Quantity"
@@ -1570,12 +2377,21 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           </View>
         ) : null}
 
+        {canSubmitGifts && giftLines.length === 0 && !noGiftsMarked ? (
+          <TouchableOpacity style={styles.noWorkButton} onPress={submitNoGifts} disabled={isSaving}>
+            <Ionicons name="ban-outline" size={18} color="#7C3AED" />
+            <Text style={styles.noWorkButtonText}>Mark No Gifts Issued</Text>
+          </TouchableOpacity>
+        ) : null}
+
         <View style={styles.detailGroupCard}>
           <View style={styles.executionSectionHeader}>
             <Text style={styles.groupCardTitle}>Gift Summary</Text>
-            <Text style={styles.executionCountText}>{giftLines.length} item(s)</Text>
+            <Text style={styles.executionCountText}>{giftLines.length} line(s), {giftTotalQuantity} qty</Text>
           </View>
-          {giftLines.length === 0 ? (
+          {giftLines.length === 0 && noGiftsMarked ? (
+            <Text style={styles.emptyText}>No gifts were added because this meeting was marked as no gifts issued.</Text>
+          ) : giftLines.length === 0 ? (
             <Text style={styles.emptyText}>No gifts added yet.</Text>
           ) : (
             <>
@@ -1613,7 +2429,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   };
 
   const renderExpensesTab = () => {
-    const canSubmitActualExpenses = isActionAllowed(['SUBMIT_EXPENSES'], status === MEETING_STATUSES.EXECUTED);
+    const noExpensesMarked = noExpensesSelected;
+    const canSubmitActualExpenses = !noExpensesMarked && isActionAllowed(
+      ['SUBMIT_EXPENSES'],
+      status === MEETING_STATUSES.EXECUTED || (isCorrectionRequired && correctionReturnTab === 'expenses')
+    );
 
     if (!isWorkflowTabAvailable('expenses')) {
       return (
@@ -1632,6 +2452,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     return (
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Actual Expenses</Text>
+        {noExpensesMarked ? (
+          <View style={styles.savedStatePanel}>
+            <Ionicons name="ban-outline" size={18} color="#0891B2" />
+            <Text style={styles.savedStateText}>No expenses were incurred for this meeting.</Text>
+          </View>
+        ) : null}
         <View style={styles.executionStatsRow}>
           <View style={styles.executionStatCard}>
             <Text style={styles.executionStatValue}>Rs. {expectedBudget || 0}</Text>
@@ -1652,11 +2478,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         {canSubmitActualExpenses ? (
           <View style={styles.detailGroupCard}>
             <Text style={styles.groupCardTitle}>Add Expense</Text>
-            <Field
+            <SelectField
               label="Expense Head"
+              placeholder="Select expense head"
+              options={expenseHeadOptions}
               value={expenseDraft.expenseHead}
-              onChangeText={(value) => updateExpenseDraft('expenseHead', value)}
-              placeholder="venue, food/snacks, travel, etc."
+              onSelect={(value) => updateExpenseDraft('expenseHead', value)}
             />
             <Field
               label="Amount"
@@ -1665,6 +2492,35 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               placeholder="Amount"
               keyboardType="numeric"
             />
+            <SelectField
+              label="Paid By"
+              placeholder="Select payer"
+              options={['COMPANY', 'DEALER', 'SHARED']}
+              value={expenseDraft.paidBy}
+              onSelect={(value) => updateExpenseDraft('paidBy', value)}
+            />
+            {expenseDraft.paidBy === 'SHARED' ? (
+              <View style={styles.twoColumn}>
+                <View style={styles.halfField}>
+                  <Field
+                    label="Company Amount"
+                    value={expenseDraft.companyAmount}
+                    onChangeText={(value) => updateExpenseDraft('companyAmount', value.replace(/[^\d.]/g, ''))}
+                    placeholder="Company"
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={styles.halfField}>
+                  <Field
+                    label="Dealer Amount"
+                    value={expenseDraft.dealerAmount}
+                    onChangeText={(value) => updateExpenseDraft('dealerAmount', value.replace(/[^\d.]/g, ''))}
+                    placeholder="Dealer"
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+            ) : null}
             <Field
               label="Expense Date"
               value={expenseDraft.expenseDate}
@@ -1689,7 +2545,9 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             <Text style={styles.groupCardTitle}>Expense Summary</Text>
             <Text style={styles.executionCountText}>Rs. {expenseTotal}</Text>
           </View>
-          {expenseLines.length === 0 ? (
+          {expenseLines.length === 0 && noExpensesMarked ? (
+            <Text style={styles.emptyText}>No expense lines were added because this meeting was marked as no expenses.</Text>
+          ) : expenseLines.length === 0 ? (
             <Text style={styles.emptyText}>No expenses added yet.</Text>
           ) : (
             expenseLines.map((expense, index) => (
@@ -1699,10 +2557,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 </View>
                 <View style={styles.summaryLineText}>
                   <Text style={styles.summaryLineTitle}>{expense.expenseHead} - Rs. {expense.amount}</Text>
-                  <Text style={styles.summaryLineMeta}>{expense.expenseDate || todayString()}{expense.remarks ? ` - ${expense.remarks}` : ''}</Text>
+                  <Text style={styles.summaryLineMeta}>
+                    {expense.expenseDate || todayString()} - {expense.paidBy || 'COMPANY'}
+                    {expense.paidBy === 'SHARED' ? ` (Company Rs. ${expense.companyAmount}, Dealer Rs. ${expense.dealerAmount})` : ''}
+                    {expense.remarks ? ` - ${expense.remarks}` : ''}
+                  </Text>
                 </View>
                 {canSubmitActualExpenses ? (
-                  <TouchableOpacity onPress={() => setExpenseLines((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}>
+                  <TouchableOpacity onPress={() => removeExpenseLine(index)}>
                     <Ionicons name="close-circle" size={20} color="#EF4444" />
                   </TouchableOpacity>
                 ) : null}
@@ -1729,15 +2591,43 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           />
         )}
 
-        {canSubmitActualExpenses ? <PrimaryButton label="Submit Expenses" onPress={submitExpenses} color="#0891B2" /> : null}
+        {canSubmitActualExpenses && expenseLines.length === 0 && !noExpensesMarked ? (
+          <TouchableOpacity style={styles.noWorkButton} onPress={submitNoExpenses} disabled={isSaving}>
+            <Ionicons name="ban-outline" size={18} color="#0891B2" />
+            <Text style={styles.noWorkButtonText}>Mark No Expenses</Text>
+          </TouchableOpacity>
+        ) : null}
+        {canSubmitActualExpenses && expenseLines.length > 0 ? <PrimaryButton label="Submit Expenses" onPress={submitExpenses} color="#0891B2" /> : null}
       </View>
     );
   };
 
   const renderFinalReportTab = () => {
-    const canSubmitReport = isActionAllowed(['SUBMIT_REPORT', 'SUBMIT_FINAL_REPORT'], status === MEETING_STATUSES.EXPENSE_SUBMITTED);
+    const canSubmitReport = isFinalReportAvailable()
+      && (
+        isFinalReportCorrection
+        || isActionAllowed(
+          ['SUBMIT_REPORT', 'SUBMIT_FINAL_REPORT', 'RESUBMIT_CORRECTION', 'RESUBMIT_FINAL_REPORT'],
+          status === MEETING_STATUSES.EXPENSE_SUBMITTED
+        )
+      );
+    const giftSummaryText = meeting?.noGifts
+      ? 'No gifts distributed'
+      : giftLines.length > 0
+        ? `${giftLines.length} line(s), ${giftTotalQuantity} total quantity`
+        : 'No gift entries yet';
+    const expenseSummaryText = meeting?.noExpenses
+      ? 'No expenses incurred'
+      : expenseLines.length > 0
+        ? `Rs. ${expenseTotal} across ${expenseLines.length} line(s)`
+        : 'No expense entries yet';
+    const attendanceSummaryText = `${meeting?.actualAttendeeCount || attendedCount} present${walkInCount ? `, ${walkInCount} walk-in(s)` : ''}`;
 
-    if (!isWorkflowTabAvailable('finalReport')) {
+    if (!isFinalReportAvailable()) {
+      const pendingSections = [
+        hasGiftCompletionFlag && !giftSectionComplete ? 'finalise gifts or mark no gifts' : '',
+        hasExpenseCompletionFlag && !expenseSectionComplete ? 'finalise expenses or mark no expenses' : '',
+      ].filter(Boolean);
       return (
         <View style={styles.section}>
           <View style={styles.lockedPanel}>
@@ -1745,7 +2635,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               <Ionicons name="lock-closed-outline" size={24} color="#64748B" />
             </View>
             <Text style={styles.lockedTitle}>Final Report Locked</Text>
-            <Text style={styles.lockedText}>Final report unlocks after expenses are submitted.</Text>
+            <Text style={styles.lockedText}>
+              {pendingSections.length > 0
+                ? `Complete pending section(s): ${pendingSections.join(', ')}.`
+                : 'Final report unlocks after gifts and expenses are completed.'}
+            </Text>
           </View>
         </View>
       );
@@ -1770,16 +2664,56 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         </View>
 
         <View style={styles.detailGroupCard}>
+          <Text style={styles.groupCardTitle}>Automatic Summary</Text>
+          <InfoRow label="Attendance" value={attendanceSummaryText} icon="people-outline" />
+          <InfoRow label="Gifts" value={giftSummaryText} icon="gift-outline" />
+          <InfoRow label="Expenses" value={expenseSummaryText} icon="receipt-outline" />
+        </View>
+
+        <View style={styles.detailGroupCard}>
           <Text style={styles.groupCardTitle}>Report Details</Text>
           <Field label="Meeting Summary" value={reportDraft.meetingSummary} onChangeText={(value) => updateReportDraft('meetingSummary', value)} placeholder="What happened in the meeting?" multiline editable={canSubmitReport} />
           <Field label="Key Discussion Points" value={reportDraft.keyDiscussionPoints} onChangeText={(value) => updateReportDraft('keyDiscussionPoints', value)} placeholder="Pricing, availability, objections, etc." multiline editable={canSubmitReport} />
-          <Field label="Leads Generated" value={reportDraft.leadsGenerated} onChangeText={(value) => updateReportDraft('leadsGenerated', value)} placeholder="Number or details" editable={canSubmitReport} />
-          <Field label="Interested Customers / Contractors" value={reportDraft.interestedCustomers} onChangeText={(value) => updateReportDraft('interestedCustomers', value)} placeholder="Names or notes" multiline editable={canSubmitReport} />
           <Field label="Competitor Information" value={reportDraft.competitorInformation} onChangeText={(value) => updateReportDraft('competitorInformation', value)} placeholder="Optional competitor notes" multiline editable={canSubmitReport} />
+          <Field label="Actual Business Outcome" value={reportDraft.actualBusinessOutcome} onChangeText={(value) => updateReportDraft('actualBusinessOutcome', value)} placeholder="Actual result from this meeting" multiline editable={canSubmitReport} />
           <Field label="Final Remarks" value={reportDraft.finalRemarks} onChangeText={(value) => updateReportDraft('finalRemarks', value)} placeholder="Final remarks" multiline editable={canSubmitReport} />
         </View>
 
-        {canSubmitReport ? <PrimaryButton label="Submit Final Report" onPress={submitFinalReport} color="#4F46E5" /> : null}
+        <View style={styles.detailGroupCard}>
+          <Text style={styles.groupCardTitle}>Leads</Text>
+          <Field label="Lead Count" value={reportDraft.leadCount} onChangeText={(value) => updateReportDraft('leadCount', value.replace(/\D/g, ''))} placeholder="Number of leads" keyboardType="numeric" editable={canSubmitReport} />
+          <Field label="Lead Details" value={reportDraft.leadDetails} onChangeText={(value) => updateReportDraft('leadDetails', value)} placeholder="Lead names, projects, quantities, or next steps" multiline editable={canSubmitReport} />
+          <Field label="Interested Customers / Contractors" value={reportDraft.interestedCustomers} onChangeText={(value) => updateReportDraft('interestedCustomers', value)} placeholder="Names or notes" multiline editable={canSubmitReport} />
+        </View>
+
+        {canSubmitReport ? (
+          <>
+            <View style={styles.reportActionRow}>
+              <TouchableOpacity style={styles.reportActionButton} onPress={saveReportDraft} disabled={isSaving}>
+                <Ionicons name="save-outline" size={17} color="#4F46E5" />
+                <Text style={styles.reportActionText}>Save Draft</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.reportActionButton} onPress={() => setIsReportPreviewOpen((prev) => !prev)} disabled={isSaving}>
+                <Ionicons name="eye-outline" size={17} color="#4F46E5" />
+                <Text style={styles.reportActionText}>{isReportPreviewOpen ? 'Hide Preview' : 'Preview'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {isReportPreviewOpen ? (
+              <View style={styles.reportPreviewCard}>
+                <Text style={styles.reportPreviewTitle}>Report Preview</Text>
+                <Text style={styles.reportPreviewText}>Summary: {reportDraft.meetingSummary || 'Not added'}</Text>
+                <Text style={styles.reportPreviewText}>Attendance: {attendanceSummaryText}</Text>
+                <Text style={styles.reportPreviewText}>Gifts: {giftSummaryText}</Text>
+                <Text style={styles.reportPreviewText}>Expenses: {expenseSummaryText}</Text>
+                <Text style={styles.reportPreviewText}>Leads: {reportDraft.leadCount || 0} - {reportDraft.leadDetails || 'No lead details'}</Text>
+                <Text style={styles.reportPreviewText}>Outcome: {reportDraft.actualBusinessOutcome || 'Not added'}</Text>
+              </View>
+            ) : null}
+
+            <PrimaryButton label="Submit Final Report" onPress={submitFinalReport} color="#4F46E5" />
+          </>
+        ) : null}
 
         {status === MEETING_STATUSES.REPORT_SUBMITTED || status === MEETING_STATUSES.CLOSED ? (
           <View style={styles.detailGroupCard}>
@@ -1839,7 +2773,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>{request.meetingType || 'Meeting'}</Text>
           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(status) }]}>
-            <Text style={styles.statusText}>{getStatusLabel(status)}</Text>
+            <Text style={styles.statusText}>{meeting?.statusLabel || getStatusLabel(status)}</Text>
           </View>
         </View>
         <TouchableOpacity style={styles.refreshButton} onPress={fetchMeeting}>
@@ -1856,7 +2790,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
-          const isAvailable = isWorkflowTabAvailable(tab.key);
+          const isAvailable = tab.key === 'finalReport'
+            ? isFinalReportAvailable()
+            : tab.key === 'gifts'
+              ? isGiftsAvailable()
+              : isWorkflowTabAvailable(tab.key);
           return (
             <TouchableOpacity
               key={tab.key}
@@ -1890,6 +2828,18 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="none"
       >
+        {isCorrectionRequired && activeTab !== 'request' ? (
+          <View style={styles.correctionPanel}>
+            <View style={styles.correctionIcon}>
+              <Ionicons name="construct-outline" size={20} color="#EA580C" />
+            </View>
+            <View style={styles.correctionTextWrap}>
+              <Text style={styles.correctionTitle}>Correction Required{meeting?.correctionStage ? ` - ${meeting.correctionStage}` : ''}</Text>
+              <Text style={styles.correctionText}>{meeting?.correctionRemarks || 'Please update the requested section and resubmit.'}</Text>
+              <Text style={styles.correctionMeta}>Affected section: {correctionSectionLabel}</Text>
+            </View>
+          </View>
+        ) : null}
         {renderActiveTab()}
       </ScrollView>
     </SafeAreaView>
@@ -2005,6 +2955,74 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginBottom: 14,
   },
+  correctionPanel: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    backgroundColor: '#FFF7ED',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  negativePanel: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  correctionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    marginRight: 10,
+  },
+  correctionTextWrap: {
+    flex: 1,
+  },
+  correctionTitle: {
+    color: '#EA580C',
+    fontSize: 14.5,
+    fontWeight: '900',
+  },
+  negativeTitle: {
+    color: '#DC2626',
+    fontSize: 14.5,
+    fontWeight: '900',
+  },
+  correctionText: {
+    color: '#475569',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  correctionMeta: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 5,
+  },
+  copyRequestButton: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DC2626',
+    borderRadius: 17,
+    paddingHorizontal: 12,
+    marginTop: 10,
+  },
+  copyRequestText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    marginLeft: 6,
+  },
   field: {
     marginBottom: 13,
   },
@@ -2038,6 +3056,97 @@ const styles = StyleSheet.create({
   },
   halfField: {
     width: '48%',
+  },
+  planCard: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    backgroundColor: '#F8FAFC',
+  },
+  planCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  planCardTitle: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  planCardSubtitle: {
+    color: '#64748B',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+    maxWidth: 210,
+  },
+  planBadge: {
+    overflow: 'hidden',
+    color: '#4F46E5',
+    fontSize: 12,
+    fontWeight: '900',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: '#EEF2FF',
+  },
+  planEmptyText: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 12,
+  },
+  planLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 11,
+    marginTop: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  planLineMain: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  planLineTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  planLineMeta: {
+    color: '#64748B',
+    fontSize: 12.5,
+    marginTop: 3,
+  },
+  planDeleteButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF2F2',
+  },
+  secondaryButton: {
+    minHeight: 46,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  secondaryButtonText: {
+    color: '#4F46E5',
+    fontSize: 14,
+    fontWeight: '900',
+    marginLeft: 7,
   },
   chipWrap: {
     flexDirection: 'row',
@@ -2208,6 +3317,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  dealerSelectButton: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dealerSelectIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF2FF',
+    marginRight: 10,
+  },
+  dealerSelectTextWrap: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  dealerSelectTitle: {
+    color: '#111827',
+    fontSize: 14.5,
+    fontWeight: '800',
+  },
+  dealerSelectPlaceholder: {
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+  dealerSelectSubtitle: {
+    color: '#64748B',
+    fontSize: 12,
+    marginTop: 2,
+  },
   existingButton: {
     minHeight: 48,
     flexDirection: 'row',
@@ -2249,6 +3395,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   infoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    paddingVertical: 12,
+  },
+  infoBlock: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     borderBottomWidth: 1,
@@ -2553,6 +3706,23 @@ const styles = StyleSheet.create({
     color: '#2563EB',
     fontWeight: '900',
   },
+  noWorkButton: {
+    minHeight: 46,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    marginBottom: 12,
+  },
+  noWorkButtonText: {
+    marginLeft: 8,
+    color: '#334155',
+    fontWeight: '900',
+    fontSize: 13,
+  },
   executionCompletePanel: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2658,6 +3828,48 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 17,
     marginLeft: 8,
+  },
+  reportActionRow: {
+    flexDirection: 'row',
+    marginBottom: 12,
+  },
+  reportActionButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 10,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    marginHorizontal: 4,
+  },
+  reportActionText: {
+    marginLeft: 7,
+    color: '#4F46E5',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  reportPreviewCard: {
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    borderRadius: 12,
+    padding: 13,
+    backgroundColor: '#EEF2FF',
+    marginBottom: 12,
+  },
+  reportPreviewTitle: {
+    color: '#312E81',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+  reportPreviewText: {
+    color: '#334155',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 3,
   },
   overBudgetText: {
     color: '#DC2626',

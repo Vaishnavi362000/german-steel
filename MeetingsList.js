@@ -20,8 +20,9 @@ import {
 } from './utils/meetingApi';
 
 const filters = [
-  { key: 'upcoming', label: 'Upcoming' },
-  { key: 'previous', label: 'Previous' },
+  { key: 'needsAction', label: 'Needs Action' },
+  { key: 'scheduled', label: 'Scheduled' },
+  { key: 'completed', label: 'Completed' },
 ];
 
 const getMeetingId = (meeting) => meeting?.id || meeting?.meetingId;
@@ -55,21 +56,47 @@ const getSoftStatusColor = (status) => {
   }
 };
 
-const getDateRange = (filter) => {
+const getDateRange = () => {
   const today = moment();
-  const start = filter === 'previous'
-    ? today.clone().subtract(180, 'days').format('YYYY-MM-DD')
-    : today.format('YYYY-MM-DD');
-  const end = filter === 'previous'
-    ? today.clone().subtract(1, 'days').format('YYYY-MM-DD')
-    : today.clone().add(90, 'days').format('YYYY-MM-DD');
+  const start = today.clone().subtract(180, 'days').format('YYYY-MM-DD');
+  const end = today.clone().add(180, 'days').format('YYYY-MM-DD');
   return { start, end };
+};
+
+const getMeetingGroup = (meeting) => {
+  const status = getStatus(meeting);
+  const meetingDate = getRequest(meeting).meetingDate;
+  const isTodayOrPast = meetingDate ? moment(meetingDate).isSameOrBefore(moment(), 'day') : true;
+
+  if ([
+    MEETING_STATUSES.REPORT_SUBMITTED,
+    MEETING_STATUSES.CLOSED,
+    MEETING_STATUSES.REJECTED,
+    MEETING_STATUSES.CANCELLED,
+  ].includes(status)) {
+    return 'completed';
+  }
+
+  if ([
+    MEETING_STATUSES.DRAFT,
+    MEETING_STATUSES.CORRECTION_REQUIRED,
+    MEETING_STATUSES.EXECUTED,
+    MEETING_STATUSES.EXPENSE_SUBMITTED,
+  ].includes(status)) {
+    return 'needsAction';
+  }
+
+  if (status === MEETING_STATUSES.APPROVED) {
+    return isTodayOrPast ? 'needsAction' : 'scheduled';
+  }
+
+  return 'scheduled';
 };
 
 const MeetingsList = ({ authToken }) => {
   const navigation = useNavigation();
   const [meetings, setMeetings] = useState([]);
-  const [activeFilter, setActiveFilter] = useState('upcoming');
+  const [activeFilter, setActiveFilter] = useState('needsAction');
   const [searchText, setSearchText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -78,7 +105,7 @@ const MeetingsList = ({ authToken }) => {
     try {
       setIsLoading(true);
       setError('');
-      const { start, end } = getDateRange(activeFilter);
+      const { start, end } = getDateRange();
       const data = await listMeetings({
         authToken,
         scope: 'mine',
@@ -93,7 +120,7 @@ const MeetingsList = ({ authToken }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [authToken, activeFilter]);
+  }, [authToken]);
 
   useFocusEffect(
     useCallback(() => {
@@ -105,10 +132,9 @@ const MeetingsList = ({ authToken }) => {
     const today = moment().format('YYYY-MM-DD');
     return {
       today: meetings.filter((meeting) => getRequest(meeting).meetingDate === today).length,
-      upcoming: meetings.filter((meeting) => moment(getRequest(meeting).meetingDate).isSameOrAfter(today, 'day')).length,
-      previous: meetings.filter((meeting) => moment(getRequest(meeting).meetingDate).isBefore(today, 'day')).length,
-      pending: meetings.filter((meeting) => getStatus(meeting) === MEETING_STATUSES.PENDING_APPROVAL).length,
-      correction: meetings.filter((meeting) => getStatus(meeting) === MEETING_STATUSES.CORRECTION_REQUIRED).length,
+      needsAction: meetings.filter((meeting) => getMeetingGroup(meeting) === 'needsAction').length,
+      scheduled: meetings.filter((meeting) => getMeetingGroup(meeting) === 'scheduled').length,
+      completed: meetings.filter((meeting) => getMeetingGroup(meeting) === 'completed').length,
     };
   }, [meetings]);
 
@@ -131,11 +157,13 @@ const MeetingsList = ({ authToken }) => {
         })
       : meetings;
 
-    return [...visible].sort((a, b) => {
-      const aDate = `${getRequest(a).meetingDate || ''} ${getRequest(a).meetingTime || ''}`;
-      const bDate = `${getRequest(b).meetingDate || ''} ${getRequest(b).meetingTime || ''}`;
-      return activeFilter === 'previous' ? bDate.localeCompare(aDate) : aDate.localeCompare(bDate);
-    });
+    return visible
+      .filter((meeting) => getMeetingGroup(meeting) === activeFilter)
+      .sort((a, b) => {
+        const aDate = `${getRequest(a).meetingDate || ''} ${getRequest(a).meetingTime || ''}`;
+        const bDate = `${getRequest(b).meetingDate || ''} ${getRequest(b).meetingTime || ''}`;
+        return activeFilter === 'completed' ? bDate.localeCompare(aDate) : aDate.localeCompare(bDate);
+      });
   }, [activeFilter, meetings, searchText]);
 
   const SummaryCard = ({ title, value, icon, color }) => (
@@ -173,7 +201,7 @@ const MeetingsList = ({ authToken }) => {
             </Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: statusColors.bg }]}>
-            <Text style={[styles.statusText, { color: statusColors.text }]}>{getStatusLabel(status)}</Text>
+            <Text style={[styles.statusText, { color: statusColors.text }]}>{item.statusLabel || item.stageLabel || getStatusLabel(status)}</Text>
           </View>
         </View>
         
@@ -211,7 +239,7 @@ const MeetingsList = ({ authToken }) => {
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Meetings</Text>
-          <Text style={styles.headerSubtitle}>Create requests and track approval status</Text>
+          <Text style={styles.headerSubtitle}>Create requests and finish meeting actions</Text>
         </View>
         <TouchableOpacity style={styles.headerButton} onPress={() => navigation.navigate('NewMeeting', { authToken })}>
           <Ionicons name="add" size={22} color="#FFFFFF" />
@@ -235,14 +263,9 @@ const MeetingsList = ({ authToken }) => {
 
       <View style={styles.summaryGrid}>
         <SummaryCard title="Today" value={summary.today} icon="today-outline" color="#2563EB" />
-        <SummaryCard
-          title={activeFilter === 'previous' ? 'Previous' : 'Upcoming'}
-          value={activeFilter === 'previous' ? summary.previous : summary.upcoming}
-          icon={activeFilter === 'previous' ? 'time-outline' : 'calendar-outline'}
-          color="#4F46E5"
-        />
-        <SummaryCard title="Pending" value={summary.pending} icon="hourglass-outline" color="#F59E0B" />
-        <SummaryCard title="Corrections" value={summary.correction} icon="create-outline" color="#EA580C" />
+        <SummaryCard title="Needs Action" value={summary.needsAction} icon="alert-circle-outline" color="#EA580C" />
+        <SummaryCard title="Scheduled" value={summary.scheduled} icon="calendar-outline" color="#4F46E5" />
+        <SummaryCard title="Completed" value={summary.completed} icon="checkmark-done-outline" color="#059669" />
       </View>
 
       <View style={styles.searchContainer}>
@@ -271,7 +294,7 @@ const MeetingsList = ({ authToken }) => {
             <View style={styles.emptyState}>
               <Ionicons name="calendar-clear-outline" size={40} color="#94A3B8" />
               <Text style={styles.emptyTitle}>No meetings found</Text>
-              <Text style={styles.emptyText}>{error || `No ${activeFilter} meetings found. Create a new meeting request to start the workflow.`}</Text>
+              <Text style={styles.emptyText}>{error || `No ${filters.find((filter) => filter.key === activeFilter)?.label || 'matching'} meetings found. Create a new meeting request to start the workflow.`}</Text>
             </View>
           )}
         />

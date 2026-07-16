@@ -1,6 +1,21 @@
 import axios from 'axios';
 
 const API_BASE_URL = 'http://ec2-3-88-111-83.compute-1.amazonaws.com:8081';
+const CUSTOMER_API_BASE_URL = 'https://api.gajkesaristeels.in';
+const CREATE_MEETING_ENDPOINT = '/meeting/create';
+
+export const DEFAULT_MEETING_TYPES = [
+  'Counter',
+  'Dealer',
+  'Mason',
+  'Contractor',
+  'Engineer',
+  'Architect',
+];
+
+export const DEFAULT_GIFT_ITEMS = ['Diary', 'Pen', 'Cap', 'T-shirt', 'Brochure', 'Sample Kit'];
+
+export const DEFAULT_EXPENSE_HEADS = ['venue', 'food/snacks', 'travel', 'printing/material', 'gifts', 'other'];
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -61,11 +76,11 @@ export const MEETING_STATUSES = {
 
 const STATUS_LABELS = {
   [MEETING_STATUSES.DRAFT]: 'Draft',
-  [MEETING_STATUSES.PENDING_APPROVAL]: 'Pending Approval',
+  [MEETING_STATUSES.PENDING_APPROVAL]: 'Submitted for Approval',
   [MEETING_STATUSES.APPROVED]: 'Approved',
-  [MEETING_STATUSES.EXECUTED]: 'Executed',
+  [MEETING_STATUSES.EXECUTED]: 'Meeting Conducted',
   [MEETING_STATUSES.EXPENSE_SUBMITTED]: 'Expense Submitted',
-  [MEETING_STATUSES.REPORT_SUBMITTED]: 'Report Submitted',
+  [MEETING_STATUSES.REPORT_SUBMITTED]: 'Submitted for Final Review',
   [MEETING_STATUSES.CLOSED]: 'Closed',
   [MEETING_STATUSES.REJECTED]: 'Rejected',
   [MEETING_STATUSES.CORRECTION_REQUIRED]: 'Correction Required',
@@ -101,6 +116,8 @@ const normalizeNumber = (value) => {
   const numberValue = Number(value);
   return Number.isNaN(numberValue) ? undefined : numberValue;
 };
+
+const isEndpointUnavailable = (error) => [404, 405, 501].includes(error?.response?.status);
 
 const normalizeTimeForApi = (time) => {
   if (!time) return undefined;
@@ -139,6 +156,8 @@ const uniqueOptions = (values = []) => {
     });
 };
 
+const normalizeFlagState = (value) => String(value || '').trim().replace(/[\s-]+/g, '_').toUpperCase();
+
 export const deriveAttendeeCategoryOptions = (attendees = []) => uniqueOptions(
   attendees.map((attendee) => toTitleCase(attendee?.category))
 );
@@ -161,19 +180,63 @@ export const getStatusLabel = (status) => STATUS_LABELS[normalizeMeetingStatus(s
 const mapRequestToBackend = (request = {}, creatorId) => compactObject({
   meetingType: request.meetingType,
   creatorId: normalizeNumber(creatorId),
+  storeId: normalizeNumber(request.storeId),
   meetingDate: request.meetingDate,
   meetingTime: normalizeTimeForApi(request.meetingTime),
   city: request.city,
   state: request.state,
   location: request.location,
   customerReference: request.customerReference || request.referenceName,
-  expectedAttendees: normalizeNumber(request.expectedAttendees || request.expectedAttendeeCount),
+  expectedAttendees: normalizeNumber(request.expectedTurnout || request.expectedAttendees || request.expectedAttendeeCount),
   objective: request.objective || request.purpose,
+  expectedBusinessImpact: request.expectedBusinessImpact,
   expectedBudget: normalizeNumber(request.expectedBudget),
   expectedGiftsMaterials: request.expectedGiftsMaterials || request.expectedMaterials,
   allowWalkInAttendees: request.allowWalkInAttendees === undefined ? true : request.allowWalkInAttendees,
   remarks: request.remarks,
 });
+
+const jsonDetails = (items) => (Array.isArray(items) && items.length > 0 ? JSON.stringify(items) : undefined);
+
+const parseJsonDetails = (value) => {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'string') return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    return [];
+  }
+};
+
+const isJsonDetails = (value) => parseJsonDetails(value).length > 0
+  || (typeof value === 'string' && value.trim().startsWith('['));
+
+const buildPlanPayload = (payload = {}) => {
+  const request = payload.request || {};
+  const plannedExpenses = payload.plannedExpenses || [];
+  const plannedGifts = payload.plannedGifts || [];
+
+  return compactObject({
+    expectedBudget: normalizeNumber(request.expectedBudget),
+    plannedExpenseDetails: jsonDetails(plannedExpenses),
+    expectedGiftsMaterials: jsonDetails(plannedGifts) || request.expectedGiftsMaterials || request.expectedMaterials,
+    plannedGiftDetails: jsonDetails(plannedGifts),
+    companyContribution: normalizeNumber(request.companyContribution),
+    dealerContribution: normalizeNumber(request.dealerContribution),
+    budgetRemarks: request.budgetRemarks,
+  });
+};
+
+const buildCombinedDraftPayload = (payload = {}) => {
+  const plan = buildPlanPayload(payload);
+  return compactObject({
+    ...mapRequestToBackend(payload.request, payload.creatorId || payload.creatorEmployeeId),
+    plan: Object.keys(plan).length > 0 ? plan : undefined,
+    attendees: (payload.expectedAttendees || []).map(mapAttendeeToBackend),
+  });
+};
 
 const mapAttendeeToBackend = (attendee = {}) => compactObject({
   name: attendee.name,
@@ -216,6 +279,7 @@ const normalizeAttendee = (attendee = {}, index = 0) => {
 export const normalizeMeeting = (meeting = {}) => {
   const status = normalizeMeetingStatus(meeting.status || meeting.meetingStatus);
   const requestSource = meeting.request || meeting;
+  const planSource = meeting.plan || meeting.meetingPlan || meeting;
   const attendeeSource = Array.isArray(meeting.attendees)
     ? meeting.attendees
     : Array.isArray(meeting.expectedAttendees)
@@ -226,8 +290,23 @@ export const normalizeMeeting = (meeting = {}) => {
   const expectedAttendeeCount = typeof meeting.expectedAttendees === 'number'
     ? meeting.expectedAttendees
     : requestSource.expectedAttendeeCount || expectedAttendees.length;
+  const expectedTurnout = meeting.expectedTurnout
+    || requestSource.expectedTurnout
+    || expectedAttendeeCount;
   const gifts = Array.isArray(meeting.gifts) ? meeting.gifts : [];
   const expenses = Array.isArray(meeting.expenses) ? meeting.expenses : [];
+  const plannedGifts = parseJsonDetails(
+    planSource.plannedGiftDetails
+    || requestSource.plannedGiftDetails
+    || (isJsonDetails(planSource.expectedGiftsMaterials) ? planSource.expectedGiftsMaterials : '')
+    || (isJsonDetails(requestSource.expectedGiftsMaterials) ? requestSource.expectedGiftsMaterials : '')
+  );
+  const plannedExpenses = parseJsonDetails(planSource.plannedExpenseDetails || requestSource.plannedExpenseDetails);
+  const expectedMaterialsText = [
+    requestSource.expectedMaterials,
+    requestSource.expectedGiftsMaterials,
+    planSource.expectedGiftsMaterials,
+  ].find((value) => value && !isJsonDetails(value)) || '';
   const actualAttendeeCount = meeting.actualAttendeeCount === undefined || meeting.actualAttendeeCount === null
     ? attendees.filter((attendee) => attendee.present).length
     : meeting.actualAttendeeCount;
@@ -237,7 +316,8 @@ export const normalizeMeeting = (meeting = {}) => {
     id: meeting.id || meeting.meetingId,
     meetingId: meeting.meetingId || meeting.id,
     status,
-    statusLabel: getStatusLabel(status),
+    statusLabel: meeting.statusLabel || getStatusLabel(status),
+    stageLabel: meeting.stageLabel || '',
     actualMeetingDate: meeting.actualMeetingDate || '',
     actualMeetingTime: normalizeTimeForUi(meeting.actualMeetingTime),
     actualLocation: meeting.actualLocation || '',
@@ -245,9 +325,51 @@ export const normalizeMeeting = (meeting = {}) => {
     meetingSummary: meeting.meetingSummary || '',
     keyDiscussionPoints: meeting.keyDiscussionPoints || '',
     leadsGenerated: meeting.leadsGenerated || '',
+    leadCount: meeting.leadCount || '',
+    leadDetails: meeting.leadDetails || '',
     interestedCustomers: meeting.interestedCustomers || '',
     competitorInformation: meeting.competitorInformation || '',
+    actualBusinessOutcome: meeting.actualBusinessOutcome || '',
     finalRemarks: meeting.finalRemarks || '',
+    correctionStage: meeting.correctionStage || '',
+    correctionRemarks: meeting.correctionRemarks || meeting.approvalRemarks || '',
+    correctionRequestedBy: meeting.correctionRequestedBy || meeting.correctionRequestedByName || '',
+    correctionRequestedAt: meeting.correctionRequestedAt || '',
+    returnStatus: meeting.returnStatus || '',
+    rejectedBy: meeting.rejectedBy || meeting.rejectedByName || '',
+    rejectedAt: meeting.rejectedAt || '',
+    rejectionReason: meeting.rejectionReason || meeting.approvalRemarks || '',
+    cancellationReason: meeting.cancellationReason || meeting.cancellationRemarks || '',
+    cancellationRequested: Boolean(meeting.cancellationRequested),
+    rescheduleRequested: Boolean(meeting.rescheduleRequested),
+    meetingNotHeldReason: meeting.meetingNotHeldReason || '',
+    attendanceFinalized: Boolean(meeting.attendanceFinalized || meeting.attendanceFinalised),
+    giftsCompleted: ['giftsCompleted', 'giftCompleted', 'noGifts', 'giftCompletionState']
+      .some((key) => meeting[key] !== undefined && meeting[key] !== null && meeting[key] !== '')
+      ? Boolean(
+        meeting.giftsCompleted
+        || meeting.giftCompleted
+        || meeting.noGifts
+        || ['COMPLETED', 'NO_GIFTS'].includes(normalizeFlagState(meeting.giftCompletionState))
+      )
+      : undefined,
+    noGifts: meeting.noGifts === undefined && meeting.giftCompletionState === undefined
+      ? undefined
+      : Boolean(meeting.noGifts || normalizeFlagState(meeting.giftCompletionState) === 'NO_GIFTS'),
+    giftCompletionState: meeting.giftCompletionState || '',
+    expensesCompleted: ['expensesCompleted', 'expenseCompleted', 'noExpenses', 'expenseCompletionState']
+      .some((key) => meeting[key] !== undefined && meeting[key] !== null && meeting[key] !== '')
+      ? Boolean(
+        meeting.expensesCompleted
+        || meeting.expenseCompleted
+        || meeting.noExpenses
+        || ['COMPLETED', 'NO_EXPENSES'].includes(normalizeFlagState(meeting.expenseCompletionState))
+      )
+      : undefined,
+    noExpenses: meeting.noExpenses === undefined && meeting.expenseCompletionState === undefined
+      ? undefined
+      : Boolean(meeting.noExpenses || normalizeFlagState(meeting.expenseCompletionState) === 'NO_EXPENSES'),
+    expenseCompletionState: meeting.expenseCompletionState || '',
     finalReportApprovalRemarks: meeting.finalReportApprovalRemarks || '',
     finalReportApproved: Boolean(meeting.finalReportApproved || meeting.finalReportApprovedById || meeting.finalReportApprovedByName),
     request: {
@@ -257,19 +379,28 @@ export const normalizeMeeting = (meeting = {}) => {
       city: requestSource.city || '',
       state: requestSource.state || '',
       location: requestSource.location || '',
+      storeId: requestSource.storeId || meeting.storeId || '',
+      storeName: requestSource.storeName || meeting.storeName || meeting.dealerName || '',
       referenceName: requestSource.referenceName || requestSource.customerReference || '',
       customerReference: requestSource.customerReference || requestSource.referenceName || '',
       purpose: requestSource.purpose || requestSource.objective || '',
       objective: requestSource.objective || requestSource.purpose || '',
       expectedBudget: requestSource.expectedBudget || 0,
       expectedAttendeeCount,
-      expectedMaterials: requestSource.expectedMaterials || requestSource.expectedGiftsMaterials || '',
-      expectedGiftsMaterials: requestSource.expectedGiftsMaterials || requestSource.expectedMaterials || '',
+      expectedTurnout,
+      expectedBusinessImpact: requestSource.expectedBusinessImpact || meeting.expectedBusinessImpact || '',
+      expectedMaterials: expectedMaterialsText,
+      expectedGiftsMaterials: expectedMaterialsText,
+      companyContribution: planSource.companyContribution ?? requestSource.companyContribution ?? '',
+      dealerContribution: planSource.dealerContribution ?? requestSource.dealerContribution ?? '',
+      budgetRemarks: planSource.budgetRemarks || requestSource.budgetRemarks || '',
       allowWalkInAttendees: requestSource.allowWalkInAttendees === undefined ? true : requestSource.allowWalkInAttendees,
       remarks: requestSource.remarks || '',
     },
     attendees,
     expectedAttendees,
+    plannedGifts,
+    plannedExpenses,
     gifts,
     expenses,
     approvalHistory: meeting.approvalHistory || meeting.approvals || [],
@@ -319,6 +450,91 @@ export const getAttendeeMaster = async ({ authToken }) => {
   return Array.isArray(response.data) ? response.data.map(normalizeAttendee) : [];
 };
 
+export const getMeetingTypes = async ({ authToken }) => {
+  try {
+    const response = await api.get('/meeting/config/types', requestConfig(authToken));
+    const values = Array.isArray(response.data)
+      ? response.data
+        .filter((type) => type?.active !== false)
+        .map((type) => String(type?.name || type || '').trim())
+      : [];
+    return uniqueOptions(values.length > 0 ? values : DEFAULT_MEETING_TYPES);
+  } catch (error) {
+    console.warn('Unable to fetch meeting types, using defaults:', error.message);
+    return DEFAULT_MEETING_TYPES;
+  }
+};
+
+const normalizeConfigOptions = (data) => (Array.isArray(data)
+  ? uniqueOptions(
+    data
+      .filter((item) => item?.active !== false)
+      .map((item) => String(item?.name || item?.giftItem || item?.expenseHead || item || '').trim())
+  )
+  : []);
+
+export const getGiftItems = async ({ authToken }) => {
+  try {
+    const response = await api.get('/meeting/config/giftItems', requestConfig(authToken));
+    const values = normalizeConfigOptions(response.data);
+    return values.length > 0 ? values : DEFAULT_GIFT_ITEMS;
+  } catch (error) {
+    console.warn('Unable to fetch gift items, using defaults:', error.message);
+    return DEFAULT_GIFT_ITEMS;
+  }
+};
+
+export const getExpenseHeads = async ({ authToken }) => {
+  try {
+    const response = await api.get('/meeting/config/expenseHeads', requestConfig(authToken));
+    const values = normalizeConfigOptions(response.data);
+    return values.length > 0 ? values : DEFAULT_EXPENSE_HEADS;
+  } catch (error) {
+    console.warn('Unable to fetch expense heads, using defaults:', error.message);
+    return DEFAULT_EXPENSE_HEADS;
+  }
+};
+
+export const getDealerShops = async ({ authToken, employeeId, search = '', page = 0, size = 20 }) => {
+  if (!employeeId) return [];
+
+  const query = buildQuery({
+    id: employeeId,
+    page,
+    size,
+    sortBy: 'storeName',
+    sortOrder: 'asc',
+    storeName: search,
+  });
+  const url = `${CUSTOMER_API_BASE_URL}/store/getByEmployeeWithSort${query}`;
+
+  console.log('[Dealer Shop API Request]', {
+    method: 'GET',
+    url,
+    auth: authToken ? 'present' : 'missing',
+    payload: null,
+  });
+
+  const response = await axios.get(url, requestConfig(authToken));
+  console.log('[Dealer Shop API Response]', {
+    method: 'GET',
+    url,
+    status: response.status,
+    data: response.data,
+  });
+
+  const stores = Array.isArray(response.data?.content) ? response.data.content : Array.isArray(response.data) ? response.data : [];
+  return stores.map((store) => ({
+    ...store,
+    storeId: store.storeId || store.id,
+    storeName: store.storeName || store.name || [store.clientFirstName, store.clientLastName].filter(Boolean).join(' '),
+    ownerName: [store.clientFirstName, store.clientLastName].filter(Boolean).join(' '),
+    mobile: store.primaryContact || store.mobileNumber || store.mobile || '',
+    city: store.city || store.storeCity || '',
+    area: store.area || store.cityArea || store.address || '',
+  }));
+};
+
 export const getAttendeeCategoryOptions = async ({ authToken }) => {
   const attendees = await getAttendeeMaster({ authToken });
   return deriveAttendeeCategoryOptions(attendees);
@@ -326,43 +542,52 @@ export const getAttendeeCategoryOptions = async ({ authToken }) => {
 
 export const saveExpectedAttendees = async ({ authToken, meetingId, attendees }) => {
   const payload = (attendees || []).map(mapAttendeeToBackend);
-  const response = await api.put(
-    `/meeting/attendees${buildQuery({ id: meetingId })}`,
-    payload,
+  let response;
+  try {
+    response = await api.put(
+      `/meeting/attendees/replace${buildQuery({ id: meetingId })}`,
+      payload,
+      requestConfig(authToken)
+    );
+  } catch (error) {
+    if (!isEndpointUnavailable(error)) throw error;
+    response = await api.put(
+      `/meeting/attendees${buildQuery({ id: meetingId })}`,
+      payload,
+      requestConfig(authToken)
+    );
+  }
+  return response.data;
+};
+
+export const deleteExpectedAttendee = async ({ authToken, meetingId, meetingAttendeeId }) => {
+  const response = await api.delete(
+    `/meeting/attendees/delete${buildQuery({ id: meetingId, meetingAttendeeId })}`,
     requestConfig(authToken)
   );
   return response.data;
 };
 
 export const createMeetingDraft = async ({ authToken, payload }) => {
-  const requestPayload = mapRequestToBackend(
-    payload?.request,
-    payload?.creatorId || payload?.creatorEmployeeId
-  );
-  const createResponse = await api.post('/meeting/create', requestPayload, requestConfig(authToken));
+  const combinedPayload = buildCombinedDraftPayload(payload);
+  const createResponse = await api.post(CREATE_MEETING_ENDPOINT, combinedPayload, requestConfig(authToken));
   const meetingId = getMeetingId(createResponse.data);
-
-  if (meetingId && payload?.expectedAttendees?.length) {
-    try {
-      await saveExpectedAttendees({ authToken, meetingId, attendees: payload.expectedAttendees });
-    } catch (error) {
-      error.meetingId = meetingId;
-      error.failedStep = 'ATTENDEES';
-      throw error;
-    }
-  }
-
   return { meetingId, data: createResponse.data };
 };
 
 export const editMeeting = async ({ authToken, meetingId, payload }) => {
   const requestPayload = mapRequestToBackend(payload?.request);
+  const planPayload = buildPlanPayload(payload);
+  const editPayload = compactObject({
+    ...requestPayload,
+    plan: Object.keys(planPayload).length > 0 ? planPayload : undefined,
+  });
   let editResponse = null;
 
-  if (Object.keys(requestPayload).length > 0) {
+  if (Object.keys(editPayload).length > 0) {
     editResponse = await api.put(
       `/meeting/editRequest${buildQuery({ id: meetingId })}`,
-      requestPayload,
+      editPayload,
       requestConfig(authToken)
     );
   }
@@ -376,6 +601,20 @@ export const editMeeting = async ({ authToken, meetingId, payload }) => {
 
 export const submitMeeting = async ({ authToken, meetingId }) => {
   const response = await api.put(`/meeting/submit${buildQuery({ id: meetingId })}`, null, requestConfig(authToken));
+  return response.data;
+};
+
+export const resubmitMeetingCorrection = async ({ authToken, meetingId }) => {
+  const response = await api.put(`/meeting/resubmitCorrection${buildQuery({ id: meetingId })}`, null, requestConfig(authToken));
+  return response.data;
+};
+
+export const resubmitFinalReportCorrection = async ({ authToken, meetingId, payload }) => {
+  const response = await api.put(
+    `/meeting/finalReport${buildQuery({ id: meetingId })}`,
+    payload,
+    requestConfig(authToken)
+  );
   return response.data;
 };
 
@@ -397,10 +636,14 @@ export const rejectMeeting = async ({ authToken, meetingId, remarks }) => {
   return response.data;
 };
 
-export const requestMeetingCorrection = async ({ authToken, meetingId, remarks }) => {
+export const requestMeetingCorrection = async ({ authToken, meetingId, remarks, correctionStage = 'REQUEST' }) => {
   const response = await api.put(
     `/meeting/requestCorrection${buildQuery({ id: meetingId })}`,
-    { approvalRemarks: remarks },
+    {
+      correctionStage,
+      correctionRemarks: remarks,
+      approvalRemarks: remarks,
+    },
     requestConfig(authToken)
   );
   return response.data;
@@ -445,6 +688,19 @@ export const addWalkInAttendee = async ({ authToken, meetingId, attendee }) => {
   return normalizeAttendee(response.data);
 };
 
+export const finaliseMeetingAttendance = async ({ authToken, meetingId, payload }) => {
+  const response = await api.put(
+    `/meeting/attendance/finalise${buildQuery({ id: meetingId })}`,
+    {
+      ...payload,
+      actualMeetingTime: normalizeTimeForApi(payload?.actualMeetingTime),
+      attendees: payload?.attendees || [],
+    },
+    requestConfig(authToken)
+  );
+  return response.data;
+};
+
 export const saveMeetingGifts = async ({ authToken, meetingId, gifts }) => {
   const response = await api.put(
     `/meeting/gifts${buildQuery({ id: meetingId })}`,
@@ -454,10 +710,44 @@ export const saveMeetingGifts = async ({ authToken, meetingId, gifts }) => {
   return response.data;
 };
 
+export const markNoGifts = async ({ authToken, meetingId, remarks }) => {
+  const response = await api.put(
+    `/meeting/gifts/noGifts${buildQuery({ id: meetingId })}`,
+    { remarks },
+    requestConfig(authToken)
+  );
+  return response.data;
+};
+
+export const deleteMeetingGift = async ({ authToken, meetingId, giftId }) => {
+  const response = await api.delete(
+    `/meeting/gifts/delete${buildQuery({ id: meetingId, giftId })}`,
+    requestConfig(authToken)
+  );
+  return response.data;
+};
+
 export const submitMeetingExpenses = async ({ authToken, meetingId, payload }) => {
   const response = await api.put(
     `/meeting/expenses${buildQuery({ id: meetingId })}`,
     payload,
+    requestConfig(authToken)
+  );
+  return response.data;
+};
+
+export const markNoExpenses = async ({ authToken, meetingId, remarks }) => {
+  const response = await api.put(
+    `/meeting/expenses/noExpenses${buildQuery({ id: meetingId })}`,
+    { remarks },
+    requestConfig(authToken)
+  );
+  return response.data;
+};
+
+export const deleteMeetingExpense = async ({ authToken, meetingId, expenseId }) => {
+  const response = await api.delete(
+    `/meeting/expenses/delete${buildQuery({ id: meetingId, expenseId })}`,
     requestConfig(authToken)
   );
   return response.data;

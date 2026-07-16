@@ -18,15 +18,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import MeetingAttendeePicker from './MeetingAttendeePicker';
+import MeetingDealerShopPicker from './MeetingDealerShopPicker';
 import MeetingTimePicker, {
   formatMeetingTimeDisplay,
   isValidMeetingTime,
 } from './MeetingTimePicker';
 import {
   createMeetingDraft,
+  DEFAULT_MEETING_TYPES,
   deriveAttendeeCategoryOptions,
   getAttendeeMaster,
+  getDealerShops,
+  getExpenseHeads,
+  getGiftItems,
   getMeetingId,
+  getMeetingTypes,
   submitMeeting,
 } from './utils/meetingApi';
 
@@ -39,9 +45,16 @@ const initialRequest = {
   city: '',
   state: '',
   location: '',
+  storeId: '',
+  storeName: '',
   referenceName: '',
   purpose: '',
+  expectedBusinessImpact: '',
+  expectedTurnout: '',
   expectedBudget: '',
+  companyContribution: '',
+  dealerContribution: '',
+  budgetRemarks: '',
   expectedMaterials: '',
   remarks: '',
 };
@@ -52,6 +65,17 @@ const initialAttendee = {
   category: '',
   cityArea: '',
   company: '',
+};
+
+const initialPlannedExpense = {
+  expenseHead: '',
+  amount: '',
+};
+
+const initialPlannedGift = {
+  giftItem: '',
+  quantity: '1',
+  estimatedAmount: '',
 };
 
 const mergeOptions = (...groups) => {
@@ -232,19 +256,32 @@ const StepHeader = ({ currentStep }) => (
   </View>
 );
 
-const NewMeeting = ({ authToken }) => {
+const NewMeeting = ({ route, authToken }) => {
   const navigation = useNavigation();
+  const initialRequestFromRoute = route?.params?.initialRequest || {};
+  const initialAttendeesFromRoute = route?.params?.initialAttendees || [];
   const [currentStep, setCurrentStep] = useState(0);
-  const [request, setRequest] = useState(initialRequest);
-  const [attendees, setAttendees] = useState([]);
+  const [request, setRequest] = useState({ ...initialRequest, ...initialRequestFromRoute });
+  const [attendees, setAttendees] = useState(initialAttendeesFromRoute);
   const [attendeeDraft, setAttendeeDraft] = useState(initialAttendee);
+  const [plannedExpenses, setPlannedExpenses] = useState(route?.params?.initialPlannedExpenses || []);
+  const [plannedExpenseDraft, setPlannedExpenseDraft] = useState(initialPlannedExpense);
+  const [plannedGifts, setPlannedGifts] = useState(route?.params?.initialPlannedGifts || []);
+  const [plannedGiftDraft, setPlannedGiftDraft] = useState(initialPlannedGift);
   const [attendeeMaster, setAttendeeMaster] = useState([]);
   const [attendeeCategoryOptions, setAttendeeCategoryOptions] = useState([]);
+  const [meetingTypes, setMeetingTypes] = useState(DEFAULT_MEETING_TYPES);
+  const [expenseHeads, setExpenseHeads] = useState([]);
+  const [giftItems, setGiftItems] = useState([]);
+  const [dealerShops, setDealerShops] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isAttendeePickerOpen, setIsAttendeePickerOpen] = useState(false);
+  const [isDealerPickerOpen, setIsDealerPickerOpen] = useState(false);
   const [isLoadingAttendeeMaster, setIsLoadingAttendeeMaster] = useState(false);
+  const [isLoadingDealers, setIsLoadingDealers] = useState(false);
   const [hasLoadedAttendeeMaster, setHasLoadedAttendeeMaster] = useState(false);
+  const [hasLoadedDealers, setHasLoadedDealers] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -268,12 +305,55 @@ const NewMeeting = ({ authToken }) => {
     };
   }, [authToken]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchMeetingTypes = async () => {
+      const types = await getMeetingTypes({ authToken });
+      if (isMounted) setMeetingTypes(types);
+    };
+
+    fetchMeetingTypes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchPlanConfig = async () => {
+      const [heads, gifts] = await Promise.all([
+        getExpenseHeads({ authToken }),
+        getGiftItems({ authToken }),
+      ]);
+      if (!isMounted) return;
+      setExpenseHeads(heads);
+      setGiftItems(gifts);
+    };
+
+    fetchPlanConfig();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authToken]);
+
   const updateRequest = (field, value) => {
     setRequest((prev) => ({ ...prev, [field]: value }));
   };
 
   const updateAttendee = (field, value) => {
     setAttendeeDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updatePlannedExpense = (field, value) => {
+    setPlannedExpenseDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updatePlannedGift = (field, value) => {
+    setPlannedGiftDraft((prev) => ({ ...prev, [field]: value }));
   };
 
   const requestMissingFields = () => {
@@ -285,6 +365,8 @@ const NewMeeting = ({ authToken }) => {
       ['state', 'state'],
       ['location', 'location'],
       ['purpose', 'purpose/objective'],
+      ['expectedBusinessImpact', 'expected business impact'],
+      ['expectedTurnout', 'expected turnout'],
       ['expectedBudget', 'expected budget'],
     ];
 
@@ -300,6 +382,30 @@ const NewMeeting = ({ authToken }) => {
       return false;
     }
 
+    const selectedTypeIsActive = meetingTypes.some(
+      (type) => String(type).toLowerCase() === String(request.meetingType).toLowerCase()
+    );
+    if (!selectedTypeIsActive) {
+      Alert.alert('Invalid meeting type', 'Please select an active meeting type from the list.');
+      return false;
+    }
+
+    if (['dealer', 'counter'].some((type) => String(request.meetingType || '').toLowerCase().includes(type)) && !request.storeId) {
+      Alert.alert('Dealer / shop required', 'Select a dealer/shop from the customer database for Dealer or Counter meetings.');
+      return false;
+    }
+
+    const expectedTurnout = Number(request.expectedTurnout);
+    if (Number.isNaN(expectedTurnout) || expectedTurnout <= 0) {
+      Alert.alert('Invalid turnout', 'Expected turnout should be greater than zero.');
+      return false;
+    }
+
+    if (expectedTurnout < attendees.length) {
+      Alert.alert('Invalid turnout', 'Expected turnout cannot be lower than named attendees added.');
+      return false;
+    }
+
     if (Number.isNaN(Number(request.expectedBudget)) || Number(request.expectedBudget) < 0) {
       Alert.alert('Invalid budget', 'Expected budget should be a valid amount.');
       return false;
@@ -310,6 +416,65 @@ const NewMeeting = ({ authToken }) => {
       return false;
     }
 
+    return true;
+  };
+
+  const plannedExpenseTotal = plannedExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const plannedGiftTotal = plannedGifts.reduce((sum, item) => sum + Number(item.estimatedAmount || 0), 0);
+  const plannedTotal = plannedExpenseTotal + plannedGiftTotal;
+
+  const validatePlanForSubmit = () => {
+    if (plannedExpenses.length === 0) {
+      Alert.alert('Planned expenses required', 'Add at least one planned expense before submitting for approval.');
+      return false;
+    }
+
+    if (plannedGifts.length === 0) {
+      Alert.alert('Planned gifts required', 'Add at least one planned gift/material before submitting for approval.');
+      return false;
+    }
+
+    const contributionFields = [
+      ['companyContribution', 'company contribution'],
+      ['dealerContribution', 'dealer contribution'],
+    ];
+    const missingContributions = contributionFields
+      .filter(([field]) => !String(request[field] ?? '').trim())
+      .map(([, label]) => label);
+
+    if (missingContributions.length > 0) {
+      Alert.alert('Contribution split required', `Please add ${missingContributions.join(' and ')}. Use 0 if not applicable.`);
+      return false;
+    }
+
+    const expectedBudget = Number(request.expectedBudget || 0);
+    const companyContribution = Number(request.companyContribution || 0);
+    const dealerContribution = Number(request.dealerContribution || 0);
+
+    if ([companyContribution, dealerContribution].some((amount) => Number.isNaN(amount) || amount < 0)) {
+      Alert.alert('Invalid contribution', 'Company and dealer contribution should be valid non-negative amounts.');
+      return false;
+    }
+
+    const contributionTotal = companyContribution + dealerContribution;
+    if (Math.abs(contributionTotal - expectedBudget) > 0.009) {
+      Alert.alert(
+        'Budget mismatch',
+        `Company + dealer contribution must equal expected budget. Expected Rs. ${expectedBudget}, currently Rs. ${contributionTotal}.`
+      );
+      return false;
+    }
+
+    return true;
+  };
+
+  const validateSubmit = () => {
+    if (!validateRequest()) return false;
+    if (!validatePlanForSubmit()) return false;
+    if (attendees.length === 0) {
+      Alert.alert('Attendees required', 'Add expected attendees before submitting for approval.');
+      return false;
+    }
     return true;
   };
 
@@ -351,6 +516,52 @@ const NewMeeting = ({ authToken }) => {
 
   const removeAttendee = (attendeeId) => {
     setAttendees((prev) => prev.filter((attendee) => attendee.id !== attendeeId));
+  };
+
+  const addPlannedExpense = () => {
+    const amount = Number(plannedExpenseDraft.amount || 0);
+    if (!plannedExpenseDraft.expenseHead || Number.isNaN(amount) || amount <= 0) {
+      Alert.alert('Invalid planned expense', 'Select an expense head and enter a valid amount.');
+      return;
+    }
+
+    setPlannedExpenses((prev) => [
+      ...prev,
+      {
+        id: `plan-expense-${Date.now()}`,
+        expenseHead: plannedExpenseDraft.expenseHead,
+        amount,
+      },
+    ]);
+    setPlannedExpenseDraft(initialPlannedExpense);
+  };
+
+  const removePlannedExpense = (id) => {
+    setPlannedExpenses((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const addPlannedGift = () => {
+    const quantity = Number(plannedGiftDraft.quantity || 0);
+    const estimatedAmount = Number(plannedGiftDraft.estimatedAmount || 0);
+    if (!plannedGiftDraft.giftItem || Number.isNaN(quantity) || quantity <= 0 || Number.isNaN(estimatedAmount) || estimatedAmount <= 0) {
+      Alert.alert('Invalid planned gift', 'Select a gift item and enter valid quantity and estimated amount.');
+      return;
+    }
+
+    setPlannedGifts((prev) => [
+      ...prev,
+      {
+        id: `plan-gift-${Date.now()}`,
+        giftItem: plannedGiftDraft.giftItem,
+        quantity,
+        estimatedAmount,
+      },
+    ]);
+    setPlannedGiftDraft(initialPlannedGift);
+  };
+
+  const removePlannedGift = (id) => {
+    setPlannedGifts((prev) => prev.filter((item) => item.id !== id));
   };
 
   const addExistingAttendee = (attendee) => {
@@ -398,6 +609,44 @@ const NewMeeting = ({ authToken }) => {
     }
   };
 
+  const fetchDealerShops = async (search = '') => {
+    try {
+      setIsLoadingDealers(true);
+      const employeeId = await AsyncStorage.getItem('employeeId');
+      const data = await getDealerShops({ authToken, employeeId, search });
+      setDealerShops(data);
+    } catch (error) {
+      console.warn('Unable to fetch dealer/shop list:', error.message);
+    } finally {
+      setHasLoadedDealers(true);
+      setIsLoadingDealers(false);
+    }
+  };
+
+  const openDealerPicker = async () => {
+    setIsDealerPickerOpen(true);
+    if (!hasLoadedDealers) {
+      await fetchDealerShops();
+    }
+  };
+
+  const selectDealerShop = (shop) => {
+    setRequest((prev) => ({
+      ...prev,
+      storeId: shop.storeId,
+      storeName: shop.storeName,
+    }));
+    setIsDealerPickerOpen(false);
+  };
+
+  const openCustomerCreation = () => {
+    setIsDealerPickerOpen(false);
+    navigation.navigate('Customer', {
+      screen: 'CustomerListScreen',
+      params: { openCreateCustomer: true, source: 'meeting' },
+    });
+  };
+
   const useCurrentLocation = async () => {
     try {
       setIsLocating(true);
@@ -435,19 +684,17 @@ const NewMeeting = ({ authToken }) => {
       creatorId: employeeId,
       request: {
         ...request,
-        expectedBudget: Number(request.expectedBudget),
-        expectedAttendeeCount: attendees.length,
+        expectedTurnout: request.expectedTurnout,
+        namedAttendeeCount: attendees.length,
       },
       expectedAttendees: attendees.map(({ id, ...attendee }) => attendee),
+      plannedExpenses: plannedExpenses.map(({ id, ...item }) => item),
+      plannedGifts: plannedGifts.map(({ id, ...item }) => item),
     };
   };
 
   const saveMeeting = async (shouldSubmit) => {
-    if (!validateRequest()) return;
-    if (shouldSubmit && attendees.length === 0) {
-      Alert.alert('Attendees required', 'Add expected attendees before submitting for approval.');
-      return;
-    }
+    if (shouldSubmit && !validateSubmit()) return;
 
     try {
       setIsSaving(true);
@@ -479,8 +726,8 @@ const NewMeeting = ({ authToken }) => {
       if (error.failedStep === 'ATTENDEES' && error.meetingId) {
         const status = error.response?.status;
         Alert.alert(
-          'Draft created, attendees blocked',
-          `Meeting #${error.meetingId} was created, but the backend rejected attendee saving${status ? ` with ${status}` : ''}. Ask backend to allow PUT /meeting/attendees for this role.`
+          'Draft incomplete on backend',
+          `Meeting #${error.meetingId} was created, but linked attendee saving failed${status ? ` with ${status}` : ''}. The new atomic save endpoint is needed to prevent partial records.`
         );
         navigation.replace('MeetingDetail', { meetingId: error.meetingId, authToken });
         return;
@@ -492,11 +739,6 @@ const NewMeeting = ({ authToken }) => {
   };
 
   const goNext = () => {
-    if (currentStep === 0 && !validateRequest()) return;
-    if (currentStep === 1 && attendees.length === 0) {
-      Alert.alert('Attendees required', 'Add at least one expected attendee before review.');
-      return;
-    }
     setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1));
   };
 
@@ -513,11 +755,12 @@ const NewMeeting = ({ authToken }) => {
       <Text style={styles.sectionEyebrow}>Step 1 of 3</Text>
       <Text style={styles.sectionTitle}>Meeting Request</Text>
       <Text style={styles.sectionSubtitle}>Capture the basic plan first. Attendees come next.</Text>
-      <Field
+      <SelectField
         label="Meeting Type"
+        placeholder="Select meeting type"
+        options={meetingTypes}
         value={request.meetingType}
-        onChangeText={(value) => updateRequest('meetingType', value)}
-        placeholder="Counter, Dealer, Mason, Contractor, etc."
+        onSelect={(value) => updateRequest('meetingType', value)}
       />
       <View style={styles.twoColumn}>
         <View style={styles.halfField}>
@@ -550,11 +793,26 @@ const NewMeeting = ({ authToken }) => {
         onUseCurrentLocation={useCurrentLocation}
         isLocating={isLocating}
       />
+      <View style={styles.field}>
+        <Text style={styles.label}>Dealer / Shop</Text>
+        <TouchableOpacity style={styles.dealerSelectButton} onPress={openDealerPicker}>
+          <View style={styles.dealerSelectIcon}>
+            <Ionicons name="storefront-outline" size={18} color="#4F46E5" />
+          </View>
+          <View style={styles.dealerSelectTextWrap}>
+            <Text style={[styles.dealerSelectTitle, !request.storeName && styles.dealerSelectPlaceholder]} numberOfLines={1}>
+              {request.storeName || 'Select dealer / shop'}
+            </Text>
+            <Text style={styles.dealerSelectSubtitle}>Linked to customer database</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+        </TouchableOpacity>
+      </View>
       <Field
-        label="Dealer / Counter / Customer Reference"
+        label="Additional Customer Reference"
         value={request.referenceName}
         onChangeText={(value) => updateRequest('referenceName', value)}
-        placeholder="Optional reference"
+        placeholder="Optional extra context"
       />
       <Field
         label="Purpose / Objective"
@@ -564,6 +822,20 @@ const NewMeeting = ({ authToken }) => {
         multiline
       />
       <Field
+        label="Expected Business Impact"
+        value={request.expectedBusinessImpact}
+        onChangeText={(value) => updateRequest('expectedBusinessImpact', value)}
+        placeholder="Example: Generate five contractor leads and 20 tonnes expected monthly demand."
+        multiline
+      />
+      <Field
+        label="Expected Turnout"
+        value={request.expectedTurnout}
+        onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))}
+        placeholder="Planned total attendees"
+        keyboardType="numeric"
+      />
+      <Field
         label="Expected Budget"
         value={request.expectedBudget}
         onChangeText={(value) => updateRequest('expectedBudget', value)}
@@ -571,18 +843,159 @@ const NewMeeting = ({ authToken }) => {
         keyboardType="numeric"
       />
       <Field
-        label="Expected Gifts / Materials"
+        label="Gift / Material Notes"
         value={request.expectedMaterials}
         onChangeText={(value) => updateRequest('expectedMaterials', value)}
-        placeholder="Brochures, samples, gifts, etc."
+        placeholder="Optional notes, e.g. brochures or samples to carry"
         multiline
       />
+      <View style={styles.planCard}>
+        <View style={styles.planCardHeader}>
+          <View>
+            <Text style={styles.planCardTitle}>Budget Contribution</Text>
+            <Text style={styles.planCardSubtitle}>Company + dealer should equal expected budget.</Text>
+          </View>
+          <Text style={styles.planBadge}>Rs. {Number(request.expectedBudget || 0)}</Text>
+        </View>
+        <View style={styles.twoColumn}>
+          <View style={styles.halfField}>
+            <Field
+              label="Company Contribution"
+              value={request.companyContribution}
+              onChangeText={(value) => updateRequest('companyContribution', value.replace(/[^\d.]/g, ''))}
+              placeholder="Company"
+              keyboardType="numeric"
+            />
+          </View>
+          <View style={styles.halfField}>
+            <Field
+              label="Dealer Contribution"
+              value={request.dealerContribution}
+              onChangeText={(value) => updateRequest('dealerContribution', value.replace(/[^\d.]/g, ''))}
+              placeholder="Dealer"
+              keyboardType="numeric"
+            />
+          </View>
+        </View>
+        <Field
+          label="Budget Remarks"
+          value={request.budgetRemarks}
+          onChangeText={(value) => updateRequest('budgetRemarks', value)}
+          placeholder="Contribution notes"
+          multiline
+        />
+      </View>
+
+      <View style={styles.planCard}>
+        <View style={styles.planCardHeader}>
+          <View>
+            <Text style={styles.planCardTitle}>Planned Expenses</Text>
+            <Text style={styles.planCardSubtitle}>Required before submit for approval.</Text>
+          </View>
+          <Text style={styles.planBadge}>Rs. {plannedExpenseTotal}</Text>
+        </View>
+        <SelectField
+          label="Expense Head"
+          placeholder="Select expense head"
+          options={expenseHeads}
+          value={plannedExpenseDraft.expenseHead}
+          onSelect={(value) => updatePlannedExpense('expenseHead', value)}
+        />
+        <Field
+          label="Amount"
+          value={plannedExpenseDraft.amount}
+          onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
+          placeholder="Planned amount"
+          keyboardType="numeric"
+        />
+        <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
+          <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+          <Text style={styles.secondaryButtonText}>Add Planned Expense</Text>
+        </TouchableOpacity>
+        {plannedExpenses.length === 0 ? (
+          <Text style={styles.planEmptyText}>No planned expenses added.</Text>
+        ) : plannedExpenses.map((item) => (
+          <View key={item.id} style={styles.planLine}>
+            <View style={styles.planLineMain}>
+              <Text style={styles.planLineTitle}>{item.expenseHead}</Text>
+              <Text style={styles.planLineMeta}>Rs. {item.amount}</Text>
+            </View>
+            <TouchableOpacity style={styles.planDeleteButton} onPress={() => removePlannedExpense(item.id)}>
+              <Ionicons name="close-circle" size={20} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.planCard}>
+        <View style={styles.planCardHeader}>
+          <View>
+            <Text style={styles.planCardTitle}>Planned Gifts / Materials</Text>
+            <Text style={styles.planCardSubtitle}>Enter expected gifts here with item, quantity, and estimated amount.</Text>
+          </View>
+          <Text style={styles.planBadge}>Rs. {plannedGiftTotal}</Text>
+        </View>
+        <SelectField
+          label="Gift Item"
+          placeholder="Select gift item"
+          options={giftItems}
+          value={plannedGiftDraft.giftItem}
+          onSelect={(value) => updatePlannedGift('giftItem', value)}
+        />
+        <View style={styles.twoColumn}>
+          <View style={styles.halfField}>
+            <Field
+              label="Quantity"
+              value={plannedGiftDraft.quantity}
+              onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
+              placeholder="Qty"
+              keyboardType="numeric"
+            />
+          </View>
+          <View style={styles.halfField}>
+            <Field
+              label="Estimated Amount"
+              value={plannedGiftDraft.estimatedAmount}
+              onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
+              placeholder="Amount"
+              keyboardType="numeric"
+            />
+          </View>
+        </View>
+        <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
+          <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+          <Text style={styles.secondaryButtonText}>Add Planned Gift</Text>
+        </TouchableOpacity>
+        {plannedGifts.length === 0 ? (
+          <Text style={styles.planEmptyText}>No planned gifts/materials added.</Text>
+        ) : plannedGifts.map((item) => (
+          <View key={item.id} style={styles.planLine}>
+            <View style={styles.planLineMain}>
+              <Text style={styles.planLineTitle}>{item.giftItem} x {item.quantity}</Text>
+              <Text style={styles.planLineMeta}>Estimated Rs. {item.estimatedAmount}</Text>
+            </View>
+            <TouchableOpacity style={styles.planDeleteButton} onPress={() => removePlannedGift(item.id)}>
+              <Ionicons name="close-circle" size={20} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
+        ))}
+      </View>
       <Field
         label="Remarks"
         value={request.remarks}
         onChangeText={(value) => updateRequest('remarks', value)}
         placeholder="Optional notes"
         multiline
+      />
+      <MeetingDealerShopPicker
+        visible={isDealerPickerOpen}
+        shops={dealerShops}
+        isLoading={isLoadingDealers}
+        selectedStoreId={request.storeId}
+        onClose={() => setIsDealerPickerOpen(false)}
+        onSearch={fetchDealerShops}
+        onSelect={selectDealerShop}
+        onAddNew={openCustomerCreation}
       />
     </View>
   );
@@ -591,7 +1004,7 @@ const NewMeeting = ({ authToken }) => {
     <View style={styles.section}>
       <Text style={styles.sectionEyebrow}>Step 2 of 3</Text>
       <Text style={styles.sectionTitle}>Expected Attendees</Text>
-      <Text style={styles.sectionSubtitle}>Add the people expected for approval. Mobile numbers must stay unique.</Text>
+      <Text style={styles.sectionSubtitle}>Expected turnout: {request.expectedTurnout || 0}. Add named attendees separately; mobile numbers must stay unique.</Text>
       <TouchableOpacity style={styles.existingButton} onPress={openAttendeePicker}>
         <Ionicons name="search-outline" size={18} color="#4F46E5" />
         <Text style={styles.existingButtonText}>Select Existing Attendee</Text>
@@ -667,7 +1080,7 @@ const NewMeeting = ({ authToken }) => {
                     <View style={styles.metaRow}>
                       <Ionicons name="location-outline" size={13} color="#64748B" style={styles.metaIcon} />
                       <Text style={styles.attendeeMeta} numberOfLines={1}>
-                        {attendee.cityArea || 'No area'}{attendee.company ? ` • ${attendee.company}` : ''}
+                        {attendee.cityArea || 'No area'}{attendee.company ? ` - ${attendee.company}` : ''}
                       </Text>
                     </View>
                   ) : null}
@@ -723,6 +1136,12 @@ const NewMeeting = ({ authToken }) => {
             <Text style={styles.reviewDetailText}>{request.location}</Text>
           </View>
         ) : null}
+        {request.storeName ? (
+          <View style={styles.reviewDetailRow}>
+            <Ionicons name="storefront-outline" size={15} color="#4F46E5" style={styles.reviewDetailIcon} />
+            <Text style={styles.reviewDetailText}>{request.storeName}</Text>
+          </View>
+        ) : null}
       </View>
       
       <View style={styles.reviewGroupCard}>
@@ -732,25 +1151,104 @@ const NewMeeting = ({ authToken }) => {
           <Text style={styles.reviewFieldLabel}>Purpose / Objective</Text>
           <Text style={styles.reviewFieldValue}>{request.purpose || 'No purpose added'}</Text>
         </View>
+
+        <View style={styles.reviewDivider} />
+
+        <View style={styles.reviewFieldBlock}>
+          <Text style={styles.reviewFieldLabel}>Expected Business Impact</Text>
+          <Text style={styles.reviewFieldValue}>{request.expectedBusinessImpact || 'No expected impact added'}</Text>
+        </View>
         
         <View style={styles.reviewDivider} />
         
+        <View style={styles.reviewTwoColumn}>
+          <View style={styles.reviewHalfField}>
+            <Text style={styles.reviewFieldLabel}>Expected Turnout</Text>
+            <Text style={styles.reviewFieldValue}>{request.expectedTurnout || 0}</Text>
+          </View>
+          <View style={styles.reviewHalfField}>
+            <Text style={styles.reviewFieldLabel}>Named Attendees</Text>
+            <Text style={styles.reviewFieldValue}>{attendees.length}</Text>
+          </View>
+        </View>
+
+        <View style={styles.reviewDivider} />
+
         <View style={styles.reviewTwoColumn}>
           <View style={styles.reviewHalfField}>
             <Text style={styles.reviewFieldLabel}>Expected Budget</Text>
             <Text style={[styles.reviewFieldValue, styles.reviewBudgetText]}>Rs. {request.expectedBudget || 0}</Text>
           </View>
           <View style={styles.reviewHalfField}>
-            <Text style={styles.reviewFieldLabel}>Gifts / Materials</Text>
+            <Text style={styles.reviewFieldLabel}>Gift / Material Notes</Text>
             <Text style={styles.reviewFieldValue}>{request.expectedMaterials || 'None added'}</Text>
           </View>
         </View>
       </View>
+
+      <View style={styles.reviewGroupCard}>
+        <Text style={styles.reviewGroupTitle}>Budget Plan</Text>
+        <View style={styles.reviewTwoColumn}>
+          <View style={styles.reviewHalfField}>
+            <Text style={styles.reviewFieldLabel}>Company</Text>
+            <Text style={styles.reviewFieldValue}>Rs. {request.companyContribution || 0}</Text>
+          </View>
+          <View style={styles.reviewHalfField}>
+            <Text style={styles.reviewFieldLabel}>Dealer</Text>
+            <Text style={styles.reviewFieldValue}>Rs. {request.dealerContribution || 0}</Text>
+          </View>
+        </View>
+        <View style={styles.reviewDivider} />
+        <View style={styles.reviewTwoColumn}>
+          <View style={styles.reviewHalfField}>
+            <Text style={styles.reviewFieldLabel}>Planned Expenses</Text>
+            <Text style={styles.reviewFieldValue}>Rs. {plannedExpenseTotal}</Text>
+          </View>
+          <View style={styles.reviewHalfField}>
+            <Text style={styles.reviewFieldLabel}>Planned Gifts</Text>
+            <Text style={styles.reviewFieldValue}>Rs. {plannedGiftTotal}</Text>
+          </View>
+        </View>
+        <View style={styles.reviewDivider} />
+        <View style={styles.reviewFieldBlock}>
+          <Text style={styles.reviewFieldLabel}>Planned Total</Text>
+          <Text style={styles.reviewFieldValue}>Rs. {plannedTotal}</Text>
+        </View>
+        <View style={styles.reviewDivider} />
+        <View style={styles.reviewFieldBlock}>
+          <Text style={styles.reviewFieldLabel}>Planned Expense Details</Text>
+          {plannedExpenses.length === 0 ? (
+            <Text style={styles.reviewFieldValue}>No planned expenses added</Text>
+          ) : plannedExpenses.map((item) => (
+            <Text key={item.id} style={styles.reviewFieldValue}>- {item.expenseHead}: Rs. {item.amount}</Text>
+          ))}
+        </View>
+        <View style={styles.reviewDivider} />
+        <View style={styles.reviewFieldBlock}>
+          <Text style={styles.reviewFieldLabel}>Planned Gift Details</Text>
+          {plannedGifts.length === 0 ? (
+            <Text style={styles.reviewFieldValue}>No planned gifts added</Text>
+          ) : plannedGifts.map((item) => (
+            <Text key={item.id} style={styles.reviewFieldValue}>- {item.giftItem} x {item.quantity}: Rs. {item.estimatedAmount}</Text>
+          ))}
+        </View>
+        {request.budgetRemarks ? (
+          <>
+            <View style={styles.reviewDivider} />
+            <View style={styles.reviewFieldBlock}>
+              <Text style={styles.reviewFieldLabel}>Budget Remarks</Text>
+              <Text style={styles.reviewFieldValue}>{request.budgetRemarks}</Text>
+            </View>
+          </>
+        ) : null}
+      </View>
       
       <View style={styles.reviewGroupCard}>
-        <Text style={styles.reviewGroupTitle}>Expected Attendees ({attendees.length})</Text>
+        <Text style={styles.reviewGroupTitle}>Named Expected Attendees ({attendees.length})</Text>
         <View style={styles.reviewAttendeeList}>
-          {attendees.map((attendee) => {
+          {attendees.length === 0 ? (
+            <Text style={styles.emptyText}>No named attendees added yet.</Text>
+          ) : attendees.map((attendee) => {
             const catStyle = getCategoryStyles(attendee.category);
             const initial = String(attendee.name || 'A').trim().charAt(0).toUpperCase();
             return (
@@ -1134,6 +1632,117 @@ const styles = StyleSheet.create({
     color: '#4F46E5',
     fontSize: 12,
     fontWeight: '800',
+  },
+  planCard: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    backgroundColor: '#F8FAFC',
+  },
+  planCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  planCardTitle: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  planCardSubtitle: {
+    color: '#64748B',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+    maxWidth: 210,
+  },
+  planBadge: {
+    overflow: 'hidden',
+    color: '#4F46E5',
+    fontSize: 12,
+    fontWeight: '900',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: '#EEF2FF',
+  },
+  planEmptyText: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 12,
+  },
+  planLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 11,
+    marginTop: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  planLineMain: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  planLineTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  planLineMeta: {
+    color: '#64748B',
+    fontSize: 12.5,
+    marginTop: 3,
+  },
+  planDeleteButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF2F2',
+  },
+  dealerSelectButton: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderColor: '#D7DCEA',
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dealerSelectIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF2FF',
+    marginRight: 10,
+  },
+  dealerSelectTextWrap: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  dealerSelectTitle: {
+    color: '#111827',
+    fontSize: 14.5,
+    fontWeight: '800',
+  },
+  dealerSelectPlaceholder: {
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+  dealerSelectSubtitle: {
+    color: '#64748B',
+    fontSize: 12,
+    marginTop: 2,
   },
   existingButton: {
     minHeight: 48,
