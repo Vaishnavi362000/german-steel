@@ -21,6 +21,8 @@ import MeetingTimePicker, {
   formatMeetingTimeDisplay,
   isValidMeetingTime,
 } from './MeetingTimePicker';
+import DatePicker from './DatePicker';
+import { INDIAN_STATE_OPTIONS, getCityOptionsForState } from './stateAndCityData';
 import {
   DEFAULT_MEETING_TYPES,
   MEETING_STATUSES,
@@ -107,7 +109,16 @@ const emptyWalkInAttendee = {
   company: '',
 };
 
-const todayString = () => new Date().toISOString().split('T')[0];
+const formatDateForInput = (date) => {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const todayString = () => formatDateForInput(new Date());
 
 const emptyGiftDraft = {
   meetingAttendeeIds: [],
@@ -274,8 +285,13 @@ const formatLocationAddress = (place, coords) => {
   return `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
 };
 
-const SelectField = ({ label, value, placeholder, options, onSelect, disabled = false }) => {
+const SelectField = ({ label, value, placeholder, options = [], onSelect, disabled = false }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const safeOptions = Array.isArray(options) ? options : [];
+  const filteredOptions = safeOptions.filter((option) =>
+    String(option || '').toLowerCase().includes(searchText.trim().toLowerCase())
+  );
 
   return (
     <View style={styles.field}>
@@ -286,40 +302,61 @@ const SelectField = ({ label, value, placeholder, options, onSelect, disabled = 
         activeOpacity={0.85}
         disabled={disabled}
       >
-        <Text style={[styles.selectValue, !value && styles.selectPlaceholder]}>{value || placeholder}</Text>
+        <Text style={[styles.selectValue, !value && styles.selectPlaceholder]} numberOfLines={1}>
+          {value || placeholder}
+        </Text>
         <Ionicons name="chevron-down" size={18} color="#64748B" />
       </TouchableOpacity>
 
       <Modal visible={isOpen} transparent animationType="fade" onRequestClose={() => setIsOpen(false)}>
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsOpen(false)}>
-          <View style={styles.selectSheet}>
+          <TouchableOpacity style={styles.selectSheet} activeOpacity={1} onPress={() => {}}>
             <View style={styles.selectSheetHeader}>
               <Text style={styles.selectSheetTitle}>{label}</Text>
               <TouchableOpacity style={styles.sheetCloseButton} onPress={() => setIsOpen(false)}>
                 <Ionicons name="close" size={20} color="#475569" />
               </TouchableOpacity>
             </View>
-            {options.length === 0 ? (
+            {safeOptions.length > 8 ? (
+              <TextInput
+                style={styles.selectSearchInput}
+                value={searchText}
+                onChangeText={setSearchText}
+                placeholder={`Search ${label.toLowerCase()}`}
+                placeholderTextColor="#94A3B8"
+                autoCorrect={false}
+              />
+            ) : null}
+            {safeOptions.length === 0 ? (
               <View style={styles.selectEmptyState}>
                 <Text style={styles.selectEmptyText}>No options returned from API.</Text>
               </View>
-            ) : options.map((option) => {
-              const isSelected = value === option;
-              return (
-                <TouchableOpacity
-                  key={option}
-                  style={[styles.selectOption, isSelected && styles.selectOptionActive]}
-                  onPress={() => {
-                    onSelect(option);
-                    setIsOpen(false);
-                  }}
-                >
-                  <Text style={[styles.selectOptionText, isSelected && styles.selectOptionTextActive]}>{option}</Text>
-                  {isSelected && <Ionicons name="checkmark-circle" size={18} color="#4F46E5" />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+            ) : (
+              <ScrollView style={styles.selectOptionsList} keyboardShouldPersistTaps="handled">
+                {filteredOptions.length === 0 ? (
+                  <View style={styles.selectEmptyState}>
+                    <Text style={styles.selectEmptyText}>No matching options.</Text>
+                  </View>
+                ) : filteredOptions.map((option) => {
+                  const isSelected = value === option;
+                  return (
+                    <TouchableOpacity
+                      key={option}
+                      style={[styles.selectOption, isSelected && styles.selectOptionActive]}
+                      onPress={() => {
+                        onSelect(option);
+                        setSearchText('');
+                        setIsOpen(false);
+                      }}
+                    >
+                      <Text style={[styles.selectOptionText, isSelected && styles.selectOptionTextActive]}>{option}</Text>
+                      {isSelected && <Ionicons name="checkmark-circle" size={18} color="#4F46E5" />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
     </View>
@@ -391,6 +428,16 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const [isLocating, setIsLocating] = useState(false);
   const [isAttendeePickerOpen, setIsAttendeePickerOpen] = useState(false);
   const [isDealerPickerOpen, setIsDealerPickerOpen] = useState(false);
+  const [isExpectedAttendeeFormOpen, setIsExpectedAttendeeFormOpen] = useState(false);
+  const [isPlannedExpenseFormOpen, setIsPlannedExpenseFormOpen] = useState(false);
+  const [isPlannedGiftFormOpen, setIsPlannedGiftFormOpen] = useState(false);
+  const [isGiftIssueFormOpen, setIsGiftIssueFormOpen] = useState(false);
+  const [isExpenseLineFormOpen, setIsExpenseLineFormOpen] = useState(false);
+  const [isExecutionDetailsOpen, setIsExecutionDetailsOpen] = useState(false);
+  const [isWalkInFormOpen, setIsWalkInFormOpen] = useState(false);
+  const [isRequestDatePickerOpen, setIsRequestDatePickerOpen] = useState(false);
+  const [isExecutionDatePickerOpen, setIsExecutionDatePickerOpen] = useState(false);
+  const [isExpenseDatePickerOpen, setIsExpenseDatePickerOpen] = useState(false);
   const [isLoadingAttendeeMaster, setIsLoadingAttendeeMaster] = useState(false);
   const [isLoadingDealers, setIsLoadingDealers] = useState(false);
   const [hasLoadedAttendeeMaster, setHasLoadedAttendeeMaster] = useState(false);
@@ -661,12 +708,22 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     () => plannedGifts.reduce((sum, item) => sum + Number(item.estimatedAmount || 0), 0),
     [plannedGifts]
   );
+  const requestCityOptions = getCityOptionsForState(requestDraft.state);
   const expectedBudget = Number(request.expectedBudget || 0);
   const expectedTurnoutValue = Number(request.expectedTurnout || request.expectedAttendeeCount || expectedAttendees.length || 0);
   const expensesExceedBudget = expenseTotal > expectedBudget;
 
   const updateRequest = (field, value) => {
     setRequestDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const selectRequestState = (value) => {
+    const nextCityOptions = getCityOptionsForState(value);
+    setRequestDraft((prev) => ({
+      ...prev,
+      state: value,
+      city: nextCityOptions.includes(prev.city) ? prev.city : '',
+    }));
   };
 
   const updatePlannedExpense = (field, value) => {
@@ -953,6 +1010,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setPlannedExpenseDraft(initialPlannedExpense);
+    setIsPlannedExpenseFormOpen(false);
   };
 
   const removePlannedExpense = (id) => {
@@ -977,6 +1035,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setPlannedGiftDraft(initialPlannedGift);
+    setIsPlannedGiftFormOpen(false);
   };
 
   const removePlannedGift = (id) => {
@@ -999,6 +1058,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     }
     setExpectedAttendees((prev) => [...prev, { ...attendeeDraft, mobile, id: `expected-${Date.now()}` }]);
     setAttendeeDraft(emptyAttendee);
+    setIsExpectedAttendeeFormOpen(false);
   };
 
   const addExistingAttendee = (attendee) => {
@@ -1181,6 +1241,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setWalkInDraft(emptyWalkInAttendee);
+    setIsWalkInFormOpen(false);
   };
 
   const submitExecution = async () => {
@@ -1331,6 +1392,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     ]);
     setHasGiftChanges(true);
     setGiftDraft({ ...emptyGiftDraft });
+    setIsGiftIssueFormOpen(false);
   };
 
   const removeGiftLine = async (index) => {
@@ -1397,6 +1459,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       Alert.alert('Saved', 'Marked as no gifts issued.');
       await fetchMeeting();
       setHasGiftChanges(false);
+      setIsGiftIssueFormOpen(false);
       setActiveTab('expenses');
     } catch (giftError) {
       console.error('Error marking no gifts:', giftError.response?.data || giftError.message);
@@ -1446,6 +1509,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       ...emptyExpenseDraft,
       expenseDate: expenseDraft.expenseDate || todayString(),
     });
+    setIsExpenseLineFormOpen(false);
   };
 
   const removeExpenseLine = async (index) => {
@@ -1517,6 +1581,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       await markNoExpenses({ authToken, meetingId, remarks: expenseRemarks || 'No expenses submitted from mobile' });
       Alert.alert('Submitted', 'Marked as no expenses.');
       await fetchMeeting();
+      setIsExpenseLineFormOpen(false);
       setActiveTab('finalReport');
     } catch (expenseError) {
       console.error('Error marking no expenses:', expenseError.response?.data || expenseError.message);
@@ -1660,7 +1725,19 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           />
           <View style={styles.twoColumn}>
             <View style={styles.halfField}>
-              <Field label="Date" value={requestDraft.meetingDate} onChangeText={(value) => updateRequest('meetingDate', value)} placeholder="YYYY-MM-DD" />
+              <View style={styles.field}>
+                <Text style={styles.label}>Date</Text>
+                <TouchableOpacity
+                  style={styles.dateSelectField}
+                  onPress={() => setIsRequestDatePickerOpen(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.selectValue, !requestDraft.meetingDate && styles.selectPlaceholder]} numberOfLines={1}>
+                    {requestDraft.meetingDate || 'Select date'}
+                  </Text>
+                  <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+                </TouchableOpacity>
+              </View>
             </View>
             <View style={styles.halfField}>
               <MeetingTimePicker label="Time" value={requestDraft.meetingTime} onChange={(value) => updateRequest('meetingTime', value)} />
@@ -1668,10 +1745,23 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           </View>
           <View style={styles.twoColumn}>
             <View style={styles.halfField}>
-              <Field label="City" value={requestDraft.city} onChangeText={(value) => updateRequest('city', value)} placeholder="City" />
+              <SelectField
+                label="State"
+                placeholder="Select state"
+                options={INDIAN_STATE_OPTIONS}
+                value={requestDraft.state}
+                onSelect={selectRequestState}
+              />
             </View>
             <View style={styles.halfField}>
-              <Field label="State" value={requestDraft.state} onChangeText={(value) => updateRequest('state', value)} placeholder="State" />
+              <SelectField
+                label="City"
+                placeholder={requestDraft.state ? 'Select city' : 'Select state first'}
+                options={requestCityOptions}
+                value={requestDraft.city}
+                onSelect={(value) => updateRequest('city', value)}
+                disabled={!requestDraft.state}
+              />
             </View>
           </View>
           <LocationField value={requestDraft.location} onChangeText={(value) => updateRequest('location', value)} onUseCurrentLocation={useCurrentLocation} isLocating={isLocating} />
@@ -1741,24 +1831,39 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               </View>
               <Text style={styles.planBadge}>Rs. {plannedExpenseTotal}</Text>
             </View>
-            <SelectField
-              label="Expense Head"
-              placeholder="Select expense head"
-              options={expenseHeadOptions}
-              value={plannedExpenseDraft.expenseHead}
-              onSelect={(value) => updatePlannedExpense('expenseHead', value)}
-            />
-            <Field
-              label="Amount"
-              value={plannedExpenseDraft.amount}
-              onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
-              placeholder="Planned amount"
-              keyboardType="numeric"
-            />
-            <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
-              <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
-              <Text style={styles.secondaryButtonText}>Add Planned Expense</Text>
-            </TouchableOpacity>
+            {isPlannedExpenseFormOpen ? (
+              <View style={styles.inlineFormCard}>
+                <View style={styles.inlineFormHeader}>
+                  <Text style={styles.inlineFormTitle}>New Planned Expense</Text>
+                  <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsPlannedExpenseFormOpen(false)}>
+                    <Ionicons name="close" size={18} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+                <SelectField
+                  label="Expense Head"
+                  placeholder="Select expense head"
+                  options={expenseHeadOptions}
+                  value={plannedExpenseDraft.expenseHead}
+                  onSelect={(value) => updatePlannedExpense('expenseHead', value)}
+                />
+                <Field
+                  label="Amount"
+                  value={plannedExpenseDraft.amount}
+                  onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
+                  placeholder="Planned amount"
+                  keyboardType="numeric"
+                />
+                <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
+                  <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
+                  <Text style={styles.secondaryButtonText}>Save Planned Expense</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsPlannedExpenseFormOpen(true)}>
+                <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+                <Text style={styles.addInlineButtonText}>Add Planned Expense</Text>
+              </TouchableOpacity>
+            )}
             {plannedExpenses.length === 0 ? (
               <Text style={styles.planEmptyText}>No planned expenses added.</Text>
             ) : plannedExpenses.map((item) => (
@@ -1782,37 +1887,52 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               </View>
               <Text style={styles.planBadge}>Rs. {plannedGiftTotal}</Text>
             </View>
-            <SelectField
-              label="Gift Item"
-              placeholder="Select gift item"
-              options={giftItemOptions}
-              value={plannedGiftDraft.giftItem}
-              onSelect={(value) => updatePlannedGift('giftItem', value)}
-            />
-            <View style={styles.twoColumn}>
-              <View style={styles.halfField}>
-                <Field
-                  label="Quantity"
-                  value={plannedGiftDraft.quantity}
-                  onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
-                  placeholder="Qty"
-                  keyboardType="numeric"
+            {isPlannedGiftFormOpen ? (
+              <View style={styles.inlineFormCard}>
+                <View style={styles.inlineFormHeader}>
+                  <Text style={styles.inlineFormTitle}>New Planned Gift</Text>
+                  <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsPlannedGiftFormOpen(false)}>
+                    <Ionicons name="close" size={18} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+                <SelectField
+                  label="Gift Item"
+                  placeholder="Select gift item"
+                  options={giftItemOptions}
+                  value={plannedGiftDraft.giftItem}
+                  onSelect={(value) => updatePlannedGift('giftItem', value)}
                 />
+                <View style={styles.twoColumn}>
+                  <View style={styles.halfField}>
+                    <Field
+                      label="Quantity"
+                      value={plannedGiftDraft.quantity}
+                      onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
+                      placeholder="Qty"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.halfField}>
+                    <Field
+                      label="Estimated Amount"
+                      value={plannedGiftDraft.estimatedAmount}
+                      onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
+                      placeholder="Amount"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+                <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
+                  <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
+                  <Text style={styles.secondaryButtonText}>Save Planned Gift</Text>
+                </TouchableOpacity>
               </View>
-              <View style={styles.halfField}>
-                <Field
-                  label="Estimated Amount"
-                  value={plannedGiftDraft.estimatedAmount}
-                  onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
-                  placeholder="Amount"
-                  keyboardType="numeric"
-                />
-              </View>
-            </View>
-            <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
-              <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
-              <Text style={styles.secondaryButtonText}>Add Planned Gift</Text>
-            </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsPlannedGiftFormOpen(true)}>
+                <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+                <Text style={styles.addInlineButtonText}>Add Planned Gift</Text>
+              </TouchableOpacity>
+            )}
             {plannedGifts.length === 0 ? (
               <Text style={styles.planEmptyText}>No planned gifts/materials added.</Text>
             ) : plannedGifts.map((item) => (
@@ -1843,6 +1963,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             onSearch={fetchDealerShops}
             onSelect={selectDealerShop}
             onAddNew={openCustomerCreation}
+          />
+          <DatePicker
+            isVisible={isRequestDatePickerOpen}
+            onClose={() => setIsRequestDatePickerOpen(false)}
+            onSelect={(date) => updateRequest('meetingDate', formatDateForInput(date))}
           />
         </>
       ) : (
@@ -2036,21 +2161,31 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             <Ionicons name="search-outline" size={18} color="#4F46E5" />
             <Text style={styles.existingButtonText}>Select Existing Attendee</Text>
           </TouchableOpacity>
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or add new</Text>
-            <View style={styles.dividerLine} />
-          </View>
-          <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, name: value }))} placeholder="Attendee name" />
-          <Field label="Mobile" value={attendeeDraft.mobile} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, mobile: normalizeMobile(value) }))} placeholder="10 digit mobile" keyboardType="phone-pad" />
-          {attendeeCategoryOptions.length > 0 ? (
-            <SelectField label="Category" placeholder="Select category" options={attendeeCategoryOptions} value={attendeeDraft.category} onSelect={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} />
+          {isExpectedAttendeeFormOpen ? (
+            <View style={styles.inlineFormCard}>
+              <View style={styles.inlineFormHeader}>
+                <Text style={styles.inlineFormTitle}>Add New Attendee</Text>
+                <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsExpectedAttendeeFormOpen(false)}>
+                  <Ionicons name="close" size={18} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+              <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, name: value }))} placeholder="Attendee name" />
+              <Field label="Mobile" value={attendeeDraft.mobile} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, mobile: normalizeMobile(value) }))} placeholder="10 digit mobile" keyboardType="phone-pad" />
+              {attendeeCategoryOptions.length > 0 ? (
+                <SelectField label="Category" placeholder="Select category" options={attendeeCategoryOptions} value={attendeeDraft.category} onSelect={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} />
+              ) : (
+                <Field label="Category" value={attendeeDraft.category} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} placeholder="Category from attendee master" />
+              )}
+              <Field label="City / Area" value={attendeeDraft.cityArea} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, cityArea: value }))} placeholder="Area" />
+              <Field label="Company / Shop / Project" value={attendeeDraft.company} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, company: value }))} placeholder="Optional" />
+              <PrimaryButton label="Add Expected Attendee" onPress={addAttendee} color="#2563EB" />
+            </View>
           ) : (
-            <Field label="Category" value={attendeeDraft.category} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} placeholder="Category from attendee master" />
+            <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsExpectedAttendeeFormOpen(true)}>
+              <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+              <Text style={styles.addInlineButtonText}>Add New Attendee</Text>
+            </TouchableOpacity>
           )}
-          <Field label="City / Area" value={attendeeDraft.cityArea} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, cityArea: value }))} placeholder="Area" />
-          <Field label="Company / Shop / Project" value={attendeeDraft.company} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, company: value }))} placeholder="Optional" />
-          <PrimaryButton label="Add Expected Attendee" onPress={addAttendee} color="#2563EB" />
         </>
       )}
       {expectedAttendees.length === 0 ? (
@@ -2128,15 +2263,75 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               Start execution when the meeting is happening. The next screen section opens actual location, mark attendance, and walk-in attendee entry.
             </Text>
             {canSubmitExecution ? (
-              <PrimaryButton label="Start Execution & Mark Attendance" onPress={() => setIsExecutionStarted(true)} color="#2563EB" />
+              <PrimaryButton
+                label="Start Execution"
+                onPress={() => {
+                  setIsExecutionStarted(true);
+                  setIsExecutionDetailsOpen(true);
+                }}
+                color="#2563EB"
+              />
             ) : null}
           </View>
         ) : (
           <>
-            <View style={styles.detailGroupCard}>
-              <Text style={styles.groupCardTitle}>Actual Meeting Details</Text>
-              {isExecutionSubmitted ? (
-                <>
+            {isExecutionSubmitted ? (
+              <View style={styles.detailGroupCard}>
+                <Text style={styles.groupCardTitle}>Actual Meeting Details</Text>
+                <InfoRow
+                  label="Actual Date & Time"
+                  value={[executionDraft.actualMeetingDate, formatMeetingTimeDisplay(executionDraft.actualMeetingTime)].filter(Boolean).join(' at ')}
+                  icon="calendar-outline"
+                />
+                <InfoRow
+                  label="Actual Location"
+                  value={executionDraft.actualLocation}
+                  icon="location-outline"
+                />
+              </View>
+            ) : isExecutionDetailsOpen ? (
+              <View style={styles.inlineFormCard}>
+                <View style={styles.inlineFormHeader}>
+                  <Text style={styles.inlineFormTitle}>Actual Meeting Details</Text>
+                  <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsExecutionDetailsOpen(false)}>
+                    <Ionicons name="close" size={18} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.twoColumn}>
+                  <View style={styles.halfField}>
+                    <View style={styles.field}>
+                      <Text style={styles.label}>Actual Date</Text>
+                      <TouchableOpacity
+                        style={styles.dateSelectField}
+                        onPress={() => setIsExecutionDatePickerOpen(true)}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.selectValue, !executionDraft.actualMeetingDate && styles.selectPlaceholder]} numberOfLines={1}>
+                          {executionDraft.actualMeetingDate || 'Select date'}
+                        </Text>
+                        <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <View style={styles.halfField}>
+                    <MeetingTimePicker
+                      label="Actual Time"
+                      value={executionDraft.actualMeetingTime}
+                      onChange={(value) => updateExecution('actualMeetingTime', value)}
+                    />
+                  </View>
+                </View>
+                <LocationField
+                  value={executionDraft.actualLocation}
+                  onChangeText={(value) => updateExecution('actualLocation', value)}
+                  onUseCurrentLocation={useCurrentExecutionLocation}
+                  isLocating={isLocating}
+                />
+              </View>
+            ) : (
+              <>
+                <View style={styles.detailGroupCard}>
+                  <Text style={styles.groupCardTitle}>Actual Meeting Details</Text>
                   <InfoRow
                     label="Actual Date & Time"
                     value={[executionDraft.actualMeetingDate, formatMeetingTimeDisplay(executionDraft.actualMeetingTime)].filter(Boolean).join(' at ')}
@@ -2147,35 +2342,13 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                     value={executionDraft.actualLocation}
                     icon="location-outline"
                   />
-                </>
-              ) : (
-                <>
-                  <View style={styles.twoColumn}>
-                    <View style={styles.halfField}>
-                      <Field
-                        label="Actual Date"
-                        value={executionDraft.actualMeetingDate}
-                        onChangeText={(value) => updateExecution('actualMeetingDate', value)}
-                        placeholder="YYYY-MM-DD"
-                      />
-                    </View>
-                    <View style={styles.halfField}>
-                      <MeetingTimePicker
-                        label="Actual Time"
-                        value={executionDraft.actualMeetingTime}
-                        onChange={(value) => updateExecution('actualMeetingTime', value)}
-                      />
-                    </View>
-                  </View>
-                  <LocationField
-                    value={executionDraft.actualLocation}
-                    onChangeText={(value) => updateExecution('actualLocation', value)}
-                    onUseCurrentLocation={useCurrentExecutionLocation}
-                    isLocating={isLocating}
-                  />
-                </>
-              )}
-            </View>
+                </View>
+                <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsExecutionDetailsOpen(true)}>
+                  <Ionicons name="create-outline" size={18} color="#4F46E5" />
+                  <Text style={styles.addInlineButtonText}>Edit Actual Details</Text>
+                </TouchableOpacity>
+              </>
+            )}
 
             <View style={styles.executionStatsRow}>
               <View style={styles.executionStatCard}>
@@ -2194,7 +2367,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
             <View style={styles.detailGroupCard}>
               <View style={styles.executionSectionHeader}>
-                <Text style={styles.groupCardTitle}>Mark Actual Attendance</Text>
+                <Text style={styles.groupCardTitle}>{isExecutionSubmitted ? 'Actual Attendance' : 'Mark Attendance'}</Text>
                 <Text style={styles.executionCountText}>{attendedCount} marked</Text>
               </View>
               {actualAttendance.length === 0 ? (
@@ -2207,54 +2380,66 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             </View>
 
             {canAddWalkIns ? (
-              <View style={styles.detailGroupCard}>
-                <Text style={styles.groupCardTitle}>Add Walk-in Attendee</Text>
-                <Field
-                  label="Name"
-                  value={walkInDraft.name}
-                  onChangeText={(value) => updateWalkIn('name', value)}
-                  placeholder="Walk-in attendee name"
-                />
-                <Field
-                  label="Mobile"
-                  value={walkInDraft.mobile}
-                  onChangeText={(value) => updateWalkIn('mobile', normalizeMobile(value))}
-                  placeholder="10 digit mobile"
-                  keyboardType="phone-pad"
-                />
-                {attendeeCategoryOptions.length > 0 ? (
-                  <SelectField
-                    label="Category"
-                    placeholder="Select category"
-                    options={attendeeCategoryOptions}
-                    value={walkInDraft.category}
-                    onSelect={(value) => updateWalkIn('category', value)}
-                  />
-                ) : (
+              isWalkInFormOpen ? (
+                <View style={styles.inlineFormCard}>
+                  <View style={styles.inlineFormHeader}>
+                    <Text style={styles.inlineFormTitle}>Add Walk-in Attendee</Text>
+                    <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsWalkInFormOpen(false)}>
+                      <Ionicons name="close" size={18} color="#64748B" />
+                    </TouchableOpacity>
+                  </View>
                   <Field
-                    label="Category"
-                    value={walkInDraft.category}
-                    onChangeText={(value) => updateWalkIn('category', value)}
-                    placeholder="Category from attendee master"
+                    label="Name"
+                    value={walkInDraft.name}
+                    onChangeText={(value) => updateWalkIn('name', value)}
+                    placeholder="Walk-in attendee name"
                   />
-                )}
-                <Field
-                  label="City / Area"
-                  value={walkInDraft.cityArea}
-                  onChangeText={(value) => updateWalkIn('cityArea', value)}
-                  placeholder="Area"
-                />
-                <Field
-                  label="Company / Shop / Project"
-                  value={walkInDraft.company}
-                  onChangeText={(value) => updateWalkIn('company', value)}
-                  placeholder="Optional"
-                />
-                <TouchableOpacity style={styles.addWalkInButton} onPress={addWalkInAttendee}>
-                  <Ionicons name="person-add-outline" size={18} color="#2563EB" />
-                  <Text style={styles.addWalkInText}>Add Walk-in</Text>
+                  <Field
+                    label="Mobile"
+                    value={walkInDraft.mobile}
+                    onChangeText={(value) => updateWalkIn('mobile', normalizeMobile(value))}
+                    placeholder="10 digit mobile"
+                    keyboardType="phone-pad"
+                  />
+                  {attendeeCategoryOptions.length > 0 ? (
+                    <SelectField
+                      label="Category"
+                      placeholder="Select category"
+                      options={attendeeCategoryOptions}
+                      value={walkInDraft.category}
+                      onSelect={(value) => updateWalkIn('category', value)}
+                    />
+                  ) : (
+                    <Field
+                      label="Category"
+                      value={walkInDraft.category}
+                      onChangeText={(value) => updateWalkIn('category', value)}
+                      placeholder="Category from attendee master"
+                    />
+                  )}
+                  <Field
+                    label="City / Area"
+                    value={walkInDraft.cityArea}
+                    onChangeText={(value) => updateWalkIn('cityArea', value)}
+                    placeholder="Area"
+                  />
+                  <Field
+                    label="Company / Shop / Project"
+                    value={walkInDraft.company}
+                    onChangeText={(value) => updateWalkIn('company', value)}
+                    placeholder="Optional"
+                  />
+                  <TouchableOpacity style={styles.addWalkInButton} onPress={addWalkInAttendee}>
+                    <Ionicons name="person-add-outline" size={18} color="#2563EB" />
+                    <Text style={styles.addWalkInText}>Add Walk-in</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsWalkInFormOpen(true)}>
+                  <Ionicons name="person-add-outline" size={18} color="#4F46E5" />
+                  <Text style={styles.addInlineButtonText}>Add Walk-in Attendee</Text>
                 </TouchableOpacity>
-              </View>
+              )
             ) : null}
 
             {isExecutionSubmitted ? (
@@ -2268,6 +2453,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             ) : canSubmitExecution ? (
               <PrimaryButton label="Submit Execution & Attendance" onPress={submitExecution} color="#16A34A" />
             ) : null}
+            <DatePicker
+              isVisible={isExecutionDatePickerOpen}
+              onClose={() => setIsExecutionDatePickerOpen(false)}
+              onSelect={(date) => updateExecution('actualMeetingDate', formatDateForInput(date))}
+            />
           </>
         )}
       </View>
@@ -2309,72 +2499,81 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             <Text style={styles.savedStateText}>No gifts were distributed for this meeting.</Text>
           </View>
         ) : null}
-        <View style={styles.detailGroupCard}>
-          <View style={styles.cardTitleRow}>
-            <Text style={[styles.groupCardTitle, styles.groupCardTitleInline]}>Eligible Attendees</Text>
-            {canAddGiftIssue && presentAttendees.length > 0 ? (
-              <TouchableOpacity style={styles.smallPillButton} onPress={toggleAllGiftRecipients}>
-                <Text style={styles.smallPillButtonText}>{allPresentSelected ? 'Clear' : 'Select All'}</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          <Text style={styles.giftHelperText}>Select one or more present attendees for this gift batch.</Text>
-          {presentAttendees.length === 0 ? (
-            <Text style={styles.emptyText}>No actual attendees marked present yet.</Text>
-          ) : (
-            presentAttendees.map((attendee) => {
-              const attendeeId = getGiftRecipientId(attendee);
-              const isSelected = selectedRecipientIds.includes(attendeeId);
-              return (
-                <TouchableOpacity
-                  key={attendeeId}
-                  style={[styles.recipientCard, isSelected && styles.recipientCardActive]}
-                  onPress={() => toggleGiftRecipient(attendeeId)}
-                  activeOpacity={0.85}
-                  disabled={!canAddGiftIssue}
-                >
-                  <View style={styles.recipientInfo}>
-                    <Text style={styles.recipientName}>{attendee.name}</Text>
-                    <Text style={styles.recipientMeta}>{attendee.mobile || 'Mobile not added'} - {attendee.category || 'Attendee'}</Text>
-                  </View>
-                  <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={isSelected ? '#16A34A' : '#94A3B8'} />
-                </TouchableOpacity>
-              );
-            })
-          )}
-        </View>
-
-        {presentAttendees.length > 0 && canAddGiftIssue ? (
+        {presentAttendees.length === 0 && canAddGiftIssue ? (
           <View style={styles.detailGroupCard}>
-            <View style={styles.executionSectionHeader}>
-              <Text style={[styles.groupCardTitle, styles.groupCardTitleInline]}>Gift Details</Text>
-              <Text style={styles.executionCountText}>{selectedRecipientIds.length} selected</Text>
-            </View>
-            <SelectField
-              label="Gift / Item"
-              placeholder="Select gift item"
-              options={giftItemOptions}
-              value={giftDraft.giftItem}
-              onSelect={(value) => updateGiftDraft('giftItem', value)}
-            />
-            <Field
-              label="Quantity"
-              value={giftDraft.quantity}
-              onChangeText={(value) => updateGiftDraft('quantity', value.replace(/\D/g, ''))}
-              placeholder="Quantity"
-              keyboardType="numeric"
-            />
-            <Field
-              label="Remarks"
-              value={giftDraft.remarks}
-              onChangeText={(value) => updateGiftDraft('remarks', value)}
-              placeholder="Optional remarks"
-            />
-            <TouchableOpacity style={styles.addWalkInButton} onPress={addGiftLine}>
-              <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
-              <Text style={styles.addWalkInText}>Add Gift Issue</Text>
-            </TouchableOpacity>
+            <Text style={styles.emptyText}>No actual attendees marked present yet.</Text>
           </View>
+        ) : null}
+        {presentAttendees.length > 0 && canAddGiftIssue && !noGiftsMarked ? (
+          <>
+            <View style={styles.detailGroupCard}>
+              <View style={styles.cardTitleRow}>
+                <Text style={[styles.groupCardTitle, styles.groupCardTitleInline]}>Eligible Attendees</Text>
+                <TouchableOpacity style={styles.smallPillButton} onPress={toggleAllGiftRecipients}>
+                  <Text style={styles.smallPillButtonText}>{allPresentSelected ? 'Clear' : 'Select All'}</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.giftHelperText}>Select one or more present attendees for this gift batch.</Text>
+              {presentAttendees.map((attendee) => {
+                const attendeeId = getGiftRecipientId(attendee);
+                const isSelected = selectedRecipientIds.includes(attendeeId);
+                return (
+                  <TouchableOpacity
+                    key={attendeeId}
+                    style={[styles.recipientCard, isSelected && styles.recipientCardActive]}
+                    onPress={() => toggleGiftRecipient(attendeeId)}
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.recipientInfo}>
+                      <Text style={styles.recipientName}>{attendee.name}</Text>
+                      <Text style={styles.recipientMeta}>{attendee.mobile || 'Mobile not added'} - {attendee.category || 'Attendee'}</Text>
+                    </View>
+                    <Ionicons name={isSelected ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={isSelected ? '#16A34A' : '#94A3B8'} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {isGiftIssueFormOpen ? (
+              <View style={styles.inlineFormCard}>
+                <View style={styles.inlineFormHeader}>
+                  <Text style={styles.inlineFormTitle}>Gift Details</Text>
+                  <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsGiftIssueFormOpen(false)}>
+                    <Ionicons name="close" size={18} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.giftHelperText}>{selectedRecipientIds.length} attendee(s) selected for this gift issue.</Text>
+                <SelectField
+                  label="Gift / Item"
+                  placeholder="Select gift item"
+                  options={giftItemOptions}
+                  value={giftDraft.giftItem}
+                  onSelect={(value) => updateGiftDraft('giftItem', value)}
+                />
+                <Field
+                  label="Quantity"
+                  value={giftDraft.quantity}
+                  onChangeText={(value) => updateGiftDraft('quantity', value.replace(/\D/g, ''))}
+                  placeholder="Quantity"
+                  keyboardType="numeric"
+                />
+                <Field
+                  label="Remarks"
+                  value={giftDraft.remarks}
+                  onChangeText={(value) => updateGiftDraft('remarks', value)}
+                  placeholder="Optional remarks"
+                />
+                <TouchableOpacity style={styles.addWalkInButton} onPress={addGiftLine}>
+                  <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
+                  <Text style={styles.addWalkInText}>Add Gift Issue</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsGiftIssueFormOpen(true)}>
+                <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+                <Text style={styles.addInlineButtonText}>Add Gift Details</Text>
+              </TouchableOpacity>
+            )}
+          </>
         ) : null}
 
         {canSubmitGifts && giftLines.length === 0 && !noGiftsMarked ? (
@@ -2476,8 +2675,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         </View>
 
         {canSubmitActualExpenses ? (
-          <View style={styles.detailGroupCard}>
-            <Text style={styles.groupCardTitle}>Add Expense</Text>
+          isExpenseLineFormOpen ? (
+          <View style={styles.inlineFormCard}>
+            <View style={styles.inlineFormHeader}>
+              <Text style={styles.inlineFormTitle}>Add Expense Line</Text>
+              <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsExpenseLineFormOpen(false)}>
+                <Ionicons name="close" size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
             <SelectField
               label="Expense Head"
               placeholder="Select expense head"
@@ -2521,12 +2726,19 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 </View>
               </View>
             ) : null}
-            <Field
-              label="Expense Date"
-              value={expenseDraft.expenseDate}
-              onChangeText={(value) => updateExpenseDraft('expenseDate', value)}
-              placeholder="YYYY-MM-DD"
-            />
+            <View style={styles.field}>
+              <Text style={styles.label}>Expense Date</Text>
+              <TouchableOpacity
+                style={styles.dateSelectField}
+                onPress={() => setIsExpenseDatePickerOpen(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.selectValue, !expenseDraft.expenseDate && styles.selectPlaceholder]} numberOfLines={1}>
+                  {expenseDraft.expenseDate || 'Select date'}
+                </Text>
+                <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+              </TouchableOpacity>
+            </View>
             <Field
               label="Remarks"
               value={expenseDraft.remarks}
@@ -2538,6 +2750,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               <Text style={styles.addWalkInText}>Add Expense Line</Text>
             </TouchableOpacity>
           </View>
+          ) : (
+            <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsExpenseLineFormOpen(true)}>
+              <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+              <Text style={styles.addInlineButtonText}>Add Expense Line</Text>
+            </TouchableOpacity>
+          )
         ) : null}
 
         <View style={styles.detailGroupCard}>
@@ -2598,6 +2816,11 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           </TouchableOpacity>
         ) : null}
         {canSubmitActualExpenses && expenseLines.length > 0 ? <PrimaryButton label="Submit Expenses" onPress={submitExpenses} color="#0891B2" /> : null}
+        <DatePicker
+          isVisible={isExpenseDatePickerOpen}
+          onClose={() => setIsExpenseDatePickerOpen(false)}
+          onSelect={(date) => updateExpenseDraft('expenseDate', formatDateForInput(date))}
+        />
       </View>
     );
   };
@@ -3148,6 +3371,55 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginLeft: 7,
   },
+  addInlineButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.3,
+    borderColor: '#C7D2FE',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 12,
+  },
+  addInlineButtonText: {
+    marginLeft: 8,
+    color: '#4F46E5',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  inlineFormCard: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    marginBottom: 14,
+  },
+  inlineFormHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  inlineFormTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  inlineCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+  },
+  inlineDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 14,
+  },
   chipWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3188,6 +3460,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  dateSelectField: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   selectValue: {
     flex: 1,
     color: '#111827',
@@ -3210,6 +3493,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 24,
+    maxHeight: '78%',
   },
   selectSheetHeader: {
     flexDirection: 'row',
@@ -3232,6 +3516,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F1F5F9',
+  },
+  selectSearchInput: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    color: '#111827',
+    fontSize: 14,
+    backgroundColor: '#F8FAFC',
+    marginBottom: 6,
+  },
+  selectOptionsList: {
+    maxHeight: 320,
   },
   selectOption: {
     minHeight: 48,

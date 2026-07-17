@@ -23,6 +23,8 @@ import MeetingTimePicker, {
   formatMeetingTimeDisplay,
   isValidMeetingTime,
 } from './MeetingTimePicker';
+import DatePicker from './DatePicker';
+import { INDIAN_STATE_OPTIONS, getCityOptionsForState } from './stateAndCityData';
 import {
   createMeetingDraft,
   DEFAULT_MEETING_TYPES,
@@ -36,7 +38,16 @@ import {
   submitMeeting,
 } from './utils/meetingApi';
 
-const todayString = () => new Date().toISOString().split('T')[0];
+const formatDateForInput = (date) => {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const todayString = () => formatDateForInput(new Date());
 
 const initialRequest = {
   meetingType: '',
@@ -151,47 +162,78 @@ const Field = ({ label, value, onChangeText, placeholder, keyboardType = 'defaul
   </View>
 );
 
-const SelectField = ({ label, value, placeholder, options, onSelect }) => {
+const SelectField = ({ label, value, placeholder, options = [], onSelect, disabled = false }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const safeOptions = Array.isArray(options) ? options : [];
+  const filteredOptions = safeOptions.filter((option) =>
+    String(option || '').toLowerCase().includes(searchText.trim().toLowerCase())
+  );
 
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TouchableOpacity style={styles.selectField} onPress={() => setIsOpen(true)} activeOpacity={0.85}>
-        <Text style={[styles.selectValue, !value && styles.selectPlaceholder]}>{value || placeholder}</Text>
+      <TouchableOpacity
+        style={[styles.selectField, disabled && styles.selectFieldDisabled]}
+        onPress={() => !disabled && setIsOpen(true)}
+        activeOpacity={0.85}
+        disabled={disabled}
+      >
+        <Text style={[styles.selectValue, !value && styles.selectPlaceholder]} numberOfLines={1}>
+          {value || placeholder}
+        </Text>
         <Ionicons name="chevron-down" size={18} color="#64748B" />
       </TouchableOpacity>
 
       <Modal visible={isOpen} transparent animationType="fade" onRequestClose={() => setIsOpen(false)}>
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsOpen(false)}>
-          <View style={styles.selectSheet}>
+          <TouchableOpacity style={styles.selectSheet} activeOpacity={1} onPress={() => {}}>
             <View style={styles.selectSheetHeader}>
               <Text style={styles.selectSheetTitle}>{label}</Text>
               <TouchableOpacity style={styles.sheetCloseButton} onPress={() => setIsOpen(false)}>
                 <Ionicons name="close" size={20} color="#475569" />
               </TouchableOpacity>
             </View>
-            {options.length === 0 ? (
+            {safeOptions.length > 8 ? (
+              <TextInput
+                style={styles.selectSearchInput}
+                value={searchText}
+                onChangeText={setSearchText}
+                placeholder={`Search ${label.toLowerCase()}`}
+                placeholderTextColor="#94A3B8"
+                autoCorrect={false}
+              />
+            ) : null}
+            {safeOptions.length === 0 ? (
               <View style={styles.selectEmptyState}>
                 <Text style={styles.selectEmptyText}>No options returned from API.</Text>
               </View>
-            ) : options.map((option) => {
-              const isSelected = value === option;
-              return (
-                <TouchableOpacity
-                  key={option}
-                  style={[styles.selectOption, isSelected && styles.selectOptionActive]}
-                  onPress={() => {
-                    onSelect(option);
-                    setIsOpen(false);
-                  }}
-                >
-                  <Text style={[styles.selectOptionText, isSelected && styles.selectOptionTextActive]}>{option}</Text>
-                  {isSelected && <Ionicons name="checkmark-circle" size={18} color="#4F46E5" />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+            ) : (
+              <ScrollView style={styles.selectOptionsList} keyboardShouldPersistTaps="handled">
+                {filteredOptions.length === 0 ? (
+                  <View style={styles.selectEmptyState}>
+                    <Text style={styles.selectEmptyText}>No matching options.</Text>
+                  </View>
+                ) : filteredOptions.map((option) => {
+                  const isSelected = value === option;
+                  return (
+                    <TouchableOpacity
+                      key={option}
+                      style={[styles.selectOption, isSelected && styles.selectOptionActive]}
+                      onPress={() => {
+                        onSelect(option);
+                        setSearchText('');
+                        setIsOpen(false);
+                      }}
+                    >
+                      <Text style={[styles.selectOptionText, isSelected && styles.selectOptionTextActive]}>{option}</Text>
+                      {isSelected && <Ionicons name="checkmark-circle" size={18} color="#4F46E5" />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
     </View>
@@ -238,7 +280,7 @@ const StepHeader = ({ currentStep }) => (
             ]} />
             <View style={[styles.stepCircle, (isActive || isDone) && styles.stepCircleActive]}>
               {isDone ? (
-                <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                <Ionicons name="checkmark" size={12} color="#FFFFFF" />
               ) : (
                 <Text style={[styles.stepNumber, isActive && styles.stepNumberActive]}>{index + 1}</Text>
               )}
@@ -276,12 +318,17 @@ const NewMeeting = ({ route, authToken }) => {
   const [dealerShops, setDealerShops] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isMeetingDatePickerOpen, setIsMeetingDatePickerOpen] = useState(false);
   const [isAttendeePickerOpen, setIsAttendeePickerOpen] = useState(false);
   const [isDealerPickerOpen, setIsDealerPickerOpen] = useState(false);
+  const [isAttendeeFormOpen, setIsAttendeeFormOpen] = useState(false);
+  const [isPlannedExpenseFormOpen, setIsPlannedExpenseFormOpen] = useState(false);
+  const [isPlannedGiftFormOpen, setIsPlannedGiftFormOpen] = useState(false);
   const [isLoadingAttendeeMaster, setIsLoadingAttendeeMaster] = useState(false);
   const [isLoadingDealers, setIsLoadingDealers] = useState(false);
   const [hasLoadedAttendeeMaster, setHasLoadedAttendeeMaster] = useState(false);
   const [hasLoadedDealers, setHasLoadedDealers] = useState(false);
+  const cityOptions = getCityOptionsForState(request.state);
 
   useEffect(() => {
     let isMounted = true;
@@ -342,6 +389,15 @@ const NewMeeting = ({ route, authToken }) => {
 
   const updateRequest = (field, value) => {
     setRequest((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const selectMeetingState = (value) => {
+    const nextCityOptions = getCityOptionsForState(value);
+    setRequest((prev) => ({
+      ...prev,
+      state: value,
+      city: nextCityOptions.includes(prev.city) ? prev.city : '',
+    }));
   };
 
   const updateAttendee = (field, value) => {
@@ -512,6 +568,7 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setAttendeeDraft(initialAttendee);
+    setIsAttendeeFormOpen(false);
   };
 
   const removeAttendee = (attendeeId) => {
@@ -534,6 +591,7 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setPlannedExpenseDraft(initialPlannedExpense);
+    setIsPlannedExpenseFormOpen(false);
   };
 
   const removePlannedExpense = (id) => {
@@ -558,6 +616,7 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setPlannedGiftDraft(initialPlannedGift);
+    setIsPlannedGiftFormOpen(false);
   };
 
   const removePlannedGift = (id) => {
@@ -764,12 +823,19 @@ const NewMeeting = ({ route, authToken }) => {
       />
       <View style={styles.twoColumn}>
         <View style={styles.halfField}>
-          <Field
-            label="Date"
-            value={request.meetingDate}
-            onChangeText={(value) => updateRequest('meetingDate', value)}
-            placeholder="YYYY-MM-DD"
-          />
+          <View style={styles.field}>
+            <Text style={styles.label}>Date</Text>
+            <TouchableOpacity
+              style={styles.dateSelectField}
+              onPress={() => setIsMeetingDatePickerOpen(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.selectValue, !request.meetingDate && styles.selectPlaceholder]} numberOfLines={1}>
+                {request.meetingDate || 'Select date'}
+              </Text>
+              <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={styles.halfField}>
           <MeetingTimePicker
@@ -781,10 +847,23 @@ const NewMeeting = ({ route, authToken }) => {
       </View>
       <View style={styles.twoColumn}>
         <View style={styles.halfField}>
-          <Field label="City" value={request.city} onChangeText={(value) => updateRequest('city', value)} placeholder="City" />
+          <SelectField
+            label="State"
+            placeholder="Select state"
+            options={INDIAN_STATE_OPTIONS}
+            value={request.state}
+            onSelect={selectMeetingState}
+          />
         </View>
         <View style={styles.halfField}>
-          <Field label="State" value={request.state} onChangeText={(value) => updateRequest('state', value)} placeholder="State" />
+          <SelectField
+            label="City"
+            placeholder={request.state ? 'Select city' : 'Select state first'}
+            options={cityOptions}
+            value={request.city}
+            onSelect={(value) => updateRequest('city', value)}
+            disabled={!request.state}
+          />
         </View>
       </View>
       <LocationField
@@ -894,24 +973,39 @@ const NewMeeting = ({ route, authToken }) => {
           </View>
           <Text style={styles.planBadge}>Rs. {plannedExpenseTotal}</Text>
         </View>
-        <SelectField
-          label="Expense Head"
-          placeholder="Select expense head"
-          options={expenseHeads}
-          value={plannedExpenseDraft.expenseHead}
-          onSelect={(value) => updatePlannedExpense('expenseHead', value)}
-        />
-        <Field
-          label="Amount"
-          value={plannedExpenseDraft.amount}
-          onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
-          placeholder="Planned amount"
-          keyboardType="numeric"
-        />
-        <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
-          <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
-          <Text style={styles.secondaryButtonText}>Add Planned Expense</Text>
-        </TouchableOpacity>
+        {isPlannedExpenseFormOpen ? (
+          <View style={styles.inlineFormCard}>
+            <View style={styles.inlineFormHeader}>
+              <Text style={styles.inlineFormTitle}>New Planned Expense</Text>
+              <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsPlannedExpenseFormOpen(false)}>
+                <Ionicons name="close" size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <SelectField
+              label="Expense Head"
+              placeholder="Select expense head"
+              options={expenseHeads}
+              value={plannedExpenseDraft.expenseHead}
+              onSelect={(value) => updatePlannedExpense('expenseHead', value)}
+            />
+            <Field
+              label="Amount"
+              value={plannedExpenseDraft.amount}
+              onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
+              placeholder="Planned amount"
+              keyboardType="numeric"
+            />
+            <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
+              <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
+              <Text style={styles.secondaryButtonText}>Save Planned Expense</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsPlannedExpenseFormOpen(true)}>
+            <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+            <Text style={styles.addInlineButtonText}>Add Planned Expense</Text>
+          </TouchableOpacity>
+        )}
         {plannedExpenses.length === 0 ? (
           <Text style={styles.planEmptyText}>No planned expenses added.</Text>
         ) : plannedExpenses.map((item) => (
@@ -935,37 +1029,52 @@ const NewMeeting = ({ route, authToken }) => {
           </View>
           <Text style={styles.planBadge}>Rs. {plannedGiftTotal}</Text>
         </View>
-        <SelectField
-          label="Gift Item"
-          placeholder="Select gift item"
-          options={giftItems}
-          value={plannedGiftDraft.giftItem}
-          onSelect={(value) => updatePlannedGift('giftItem', value)}
-        />
-        <View style={styles.twoColumn}>
-          <View style={styles.halfField}>
-            <Field
-              label="Quantity"
-              value={plannedGiftDraft.quantity}
-              onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
-              placeholder="Qty"
-              keyboardType="numeric"
+        {isPlannedGiftFormOpen ? (
+          <View style={styles.inlineFormCard}>
+            <View style={styles.inlineFormHeader}>
+              <Text style={styles.inlineFormTitle}>New Planned Gift</Text>
+              <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsPlannedGiftFormOpen(false)}>
+                <Ionicons name="close" size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <SelectField
+              label="Gift Item"
+              placeholder="Select gift item"
+              options={giftItems}
+              value={plannedGiftDraft.giftItem}
+              onSelect={(value) => updatePlannedGift('giftItem', value)}
             />
+            <View style={styles.twoColumn}>
+              <View style={styles.halfField}>
+                <Field
+                  label="Quantity"
+                  value={plannedGiftDraft.quantity}
+                  onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
+                  placeholder="Qty"
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.halfField}>
+                <Field
+                  label="Estimated Amount"
+                  value={plannedGiftDraft.estimatedAmount}
+                  onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
+                  placeholder="Amount"
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+            <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
+              <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
+              <Text style={styles.secondaryButtonText}>Save Planned Gift</Text>
+            </TouchableOpacity>
           </View>
-          <View style={styles.halfField}>
-            <Field
-              label="Estimated Amount"
-              value={plannedGiftDraft.estimatedAmount}
-              onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
-              placeholder="Amount"
-              keyboardType="numeric"
-            />
-          </View>
-        </View>
-        <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
-          <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
-          <Text style={styles.secondaryButtonText}>Add Planned Gift</Text>
-        </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsPlannedGiftFormOpen(true)}>
+            <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+            <Text style={styles.addInlineButtonText}>Add Planned Gift</Text>
+          </TouchableOpacity>
+        )}
         {plannedGifts.length === 0 ? (
           <Text style={styles.planEmptyText}>No planned gifts/materials added.</Text>
         ) : plannedGifts.map((item) => (
@@ -997,6 +1106,11 @@ const NewMeeting = ({ route, authToken }) => {
         onSelect={selectDealerShop}
         onAddNew={openCustomerCreation}
       />
+      <DatePicker
+        isVisible={isMeetingDatePickerOpen}
+        onClose={() => setIsMeetingDatePickerOpen(false)}
+        onSelect={(date) => updateRequest('meetingDate', formatDateForInput(date))}
+      />
     </View>
   );
 
@@ -1009,46 +1123,56 @@ const NewMeeting = ({ route, authToken }) => {
         <Ionicons name="search-outline" size={18} color="#4F46E5" />
         <Text style={styles.existingButtonText}>Select Existing Attendee</Text>
       </TouchableOpacity>
-      <View style={styles.dividerRow}>
-        <View style={styles.dividerLine} />
-        <Text style={styles.dividerText}>or add new</Text>
-        <View style={styles.dividerLine} />
-      </View>
-      <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => updateAttendee('name', value)} placeholder="Attendee name" />
-      <Field
-        label="Mobile Number"
-        value={attendeeDraft.mobile}
-        onChangeText={(value) => updateAttendee('mobile', normalizeMobile(value))}
-        placeholder="10 digit mobile"
-        keyboardType="phone-pad"
-      />
-      {attendeeCategoryOptions.length > 0 ? (
-        <SelectField
-          label="Category"
-          placeholder="Select category"
-          options={attendeeCategoryOptions}
-          value={attendeeDraft.category}
-          onSelect={(value) => updateAttendee('category', value)}
-        />
+      {isAttendeeFormOpen ? (
+        <View style={styles.inlineFormCard}>
+          <View style={styles.inlineFormHeader}>
+            <Text style={styles.inlineFormTitle}>Add New Attendee</Text>
+            <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsAttendeeFormOpen(false)}>
+              <Ionicons name="close" size={18} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+          <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => updateAttendee('name', value)} placeholder="Attendee name" />
+          <Field
+            label="Mobile Number"
+            value={attendeeDraft.mobile}
+            onChangeText={(value) => updateAttendee('mobile', normalizeMobile(value))}
+            placeholder="10 digit mobile"
+            keyboardType="phone-pad"
+          />
+          {attendeeCategoryOptions.length > 0 ? (
+            <SelectField
+              label="Category"
+              placeholder="Select category"
+              options={attendeeCategoryOptions}
+              value={attendeeDraft.category}
+              onSelect={(value) => updateAttendee('category', value)}
+            />
+          ) : (
+            <Field
+              label="Category"
+              value={attendeeDraft.category}
+              onChangeText={(value) => updateAttendee('category', value)}
+              placeholder="Category from attendee master"
+            />
+          )}
+          <Field label="City / Area" value={attendeeDraft.cityArea} onChangeText={(value) => updateAttendee('cityArea', value)} placeholder="Area or locality" />
+          <Field
+            label="Company / Shop / Project"
+            value={attendeeDraft.company}
+            onChangeText={(value) => updateAttendee('company', value)}
+            placeholder="Optional"
+          />
+          <TouchableOpacity style={styles.secondaryButton} onPress={addAttendee}>
+            <Ionicons name="person-add-outline" size={18} color="#4F46E5" />
+            <Text style={styles.secondaryButtonText}>Add Attendee</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
-        <Field
-          label="Category"
-          value={attendeeDraft.category}
-          onChangeText={(value) => updateAttendee('category', value)}
-          placeholder="Category from attendee master"
-        />
+        <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsAttendeeFormOpen(true)}>
+          <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
+          <Text style={styles.addInlineButtonText}>Add New Attendee</Text>
+        </TouchableOpacity>
       )}
-      <Field label="City / Area" value={attendeeDraft.cityArea} onChangeText={(value) => updateAttendee('cityArea', value)} placeholder="Area or locality" />
-      <Field
-        label="Company / Shop / Project"
-        value={attendeeDraft.company}
-        onChangeText={(value) => updateAttendee('company', value)}
-        placeholder="Optional"
-      />
-      <TouchableOpacity style={styles.secondaryButton} onPress={addAttendee}>
-        <Ionicons name="person-add-outline" size={18} color="#4F46E5" />
-        <Text style={styles.secondaryButtonText}>Add Attendee</Text>
-      </TouchableOpacity>
 
       <View style={styles.attendeeList}>
         <Text style={styles.subTitle}>Added Attendees ({attendees.length})</Text>
@@ -1359,16 +1483,16 @@ const styles = StyleSheet.create({
   stepHeader: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1.5,
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 5,
+    borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
     shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.015,
+    shadowRadius: 3,
+    elevation: 0,
   },
   stepItem: {
     flex: 1,
@@ -1376,15 +1500,15 @@ const styles = StyleSheet.create({
   },
   stepTrackWrap: {
     width: '100%',
-    height: 32,
+    height: 20,
     flexDirection: 'row',
     alignItems: 'center',
   },
   stepTrack: {
     flex: 1,
-    height: 3,
+    height: 2,
     backgroundColor: '#E2E8F0',
-    borderRadius: 1.5,
+    borderRadius: 1,
   },
   stepTrackActive: {
     backgroundColor: '#4F46E5',
@@ -1393,10 +1517,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   stepCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
     borderColor: '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1406,13 +1530,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#4F46E5',
     borderColor: '#4F46E5',
     shadowColor: '#4F46E5',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
   },
   stepNumber: {
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '800',
     color: '#64748B',
   },
@@ -1420,9 +1544,9 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   stepText: {
-    fontSize: 12,
+    fontSize: 9.5,
     color: '#64748B',
-    marginTop: 6,
+    marginTop: 1,
     fontWeight: '600',
   },
   stepTextActive: {
@@ -1538,6 +1662,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  dateSelectField: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#D7DCEA',
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectFieldDisabled: {
+    opacity: 0.68,
+    backgroundColor: '#F1F5F9',
+  },
   selectValue: {
     flex: 1,
     color: '#111827',
@@ -1560,6 +1699,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 24,
+    maxHeight: '78%',
   },
   selectSheetHeader: {
     flexDirection: 'row',
@@ -1582,6 +1722,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F1F5F9',
+  },
+  selectSearchInput: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#D7DCEA',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    color: '#111827',
+    fontSize: 14,
+    backgroundColor: '#F8FAFC',
+    marginBottom: 6,
+  },
+  selectOptionsList: {
+    maxHeight: 320,
   },
   selectOption: {
     minHeight: 48,
@@ -1798,6 +1952,50 @@ const styles = StyleSheet.create({
     color: '#4F46E5',
     fontWeight: '800',
     fontSize: 14.5,
+  },
+  addInlineButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.3,
+    borderColor: '#C7D2FE',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 12,
+  },
+  addInlineButtonText: {
+    marginLeft: 8,
+    color: '#4F46E5',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  inlineFormCard: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    marginBottom: 14,
+  },
+  inlineFormHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  inlineFormTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  inlineCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
   },
   attendeeList: {
     marginTop: 20,

@@ -59,3 +59,29 @@ function print_city(city_id, city_index){
 		option_str.options[option_str.length] = new Option(city_arr[i],city_arr[i]);
 	}
 }
+
+const cleanOption = (value) => String(value || '').trim();
+
+export const INDIAN_STATE_OPTIONS = state_arr
+	.map(cleanOption)
+	.filter(Boolean);
+
+export const getCityOptionsForState = (stateName) => {
+	const stateIndex = state_arr.findIndex(
+		(state) => cleanOption(state).toLowerCase() === cleanOption(stateName).toLowerCase()
+	);
+
+	if (stateIndex < 0) return [];
+
+	const seen = new Set();
+	return String(s_a[stateIndex + 1] || '')
+		.split('|')
+		.map(cleanOption)
+		.filter(Boolean)
+		.filter((city) => {
+			const key = city.toLowerCase();
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+};
