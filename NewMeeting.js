@@ -145,9 +145,13 @@ const formatLocationAddress = (place, coords) => {
   return `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
 };
 
-const Field = ({ label, value, onChangeText, placeholder, keyboardType = 'default', multiline = false }) => (
+const FieldLabel = ({ label, required = false }) => (
+  <Text style={styles.label}>{label}{required ? <Text style={styles.requiredStar}> *</Text> : null}</Text>
+);
+
+const Field = ({ label, value, onChangeText, placeholder, keyboardType = 'default', multiline = false, required = false }) => (
   <View style={styles.field}>
-    <Text style={styles.label}>{label}</Text>
+    <FieldLabel label={label} required={required} />
     <TextInput
       style={[styles.input, multiline && styles.textArea]}
       value={value}
@@ -162,7 +166,7 @@ const Field = ({ label, value, onChangeText, placeholder, keyboardType = 'defaul
   </View>
 );
 
-const SelectField = ({ label, value, placeholder, options = [], onSelect, disabled = false }) => {
+const SelectField = ({ label, value, placeholder, options = [], onSelect, disabled = false, required = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const safeOptions = Array.isArray(options) ? options : [];
@@ -172,7 +176,7 @@ const SelectField = ({ label, value, placeholder, options = [], onSelect, disabl
 
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+      <FieldLabel label={label} required={required} />
       <TouchableOpacity
         style={[styles.selectField, disabled && styles.selectFieldDisabled]}
         onPress={() => !disabled && setIsOpen(true)}
@@ -240,10 +244,10 @@ const SelectField = ({ label, value, placeholder, options = [], onSelect, disabl
   );
 };
 
-const LocationField = ({ value, onChangeText, onUseCurrentLocation, isLocating }) => (
+const LocationField = ({ value, onChangeText, onUseCurrentLocation, isLocating, required = false }) => (
   <View style={styles.field}>
     <View style={styles.fieldHeader}>
-      <Text style={styles.label}>Location</Text>
+      <FieldLabel label="Location" required={required} />
       <TouchableOpacity style={styles.locationButton} onPress={onUseCurrentLocation} disabled={isLocating}>
         {isLocating ? (
           <ActivityIndicator size="small" color="#4F46E5" />
@@ -434,6 +438,7 @@ const NewMeeting = ({ route, authToken }) => {
   const validateRequest = () => {
     const missing = requestMissingFields();
     if (missing.length > 0) {
+      setCurrentStep(0);
       Alert.alert('Missing details', `Please add ${missing.join(', ')}.`);
       return false;
     }
@@ -442,32 +447,38 @@ const NewMeeting = ({ route, authToken }) => {
       (type) => String(type).toLowerCase() === String(request.meetingType).toLowerCase()
     );
     if (!selectedTypeIsActive) {
+      setCurrentStep(0);
       Alert.alert('Invalid meeting type', 'Please select an active meeting type from the list.');
       return false;
     }
 
     if (['dealer', 'counter'].some((type) => String(request.meetingType || '').toLowerCase().includes(type)) && !request.storeId) {
+      setCurrentStep(0);
       Alert.alert('Dealer / shop required', 'Select a dealer/shop from the customer database for Dealer or Counter meetings.');
       return false;
     }
 
     const expectedTurnout = Number(request.expectedTurnout);
     if (Number.isNaN(expectedTurnout) || expectedTurnout <= 0) {
+      setCurrentStep(0);
       Alert.alert('Invalid turnout', 'Expected turnout should be greater than zero.');
       return false;
     }
 
     if (expectedTurnout < attendees.length) {
+      setCurrentStep(0);
       Alert.alert('Invalid turnout', 'Expected turnout cannot be lower than named attendees added.');
       return false;
     }
 
     if (Number.isNaN(Number(request.expectedBudget)) || Number(request.expectedBudget) < 0) {
+      setCurrentStep(0);
       Alert.alert('Invalid budget', 'Expected budget should be a valid amount.');
       return false;
     }
 
     if (!isValidMeetingTime(request.meetingTime)) {
+      setCurrentStep(0);
       Alert.alert('Invalid time', 'Please select a valid meeting time.');
       return false;
     }
@@ -481,11 +492,13 @@ const NewMeeting = ({ route, authToken }) => {
 
   const validatePlanForSubmit = () => {
     if (plannedExpenses.length === 0) {
+      setCurrentStep(0);
       Alert.alert('Planned expenses required', 'Add at least one planned expense before submitting for approval.');
       return false;
     }
 
     if (plannedGifts.length === 0) {
+      setCurrentStep(0);
       Alert.alert('Planned gifts required', 'Add at least one planned gift/material before submitting for approval.');
       return false;
     }
@@ -499,6 +512,7 @@ const NewMeeting = ({ route, authToken }) => {
       .map(([, label]) => label);
 
     if (missingContributions.length > 0) {
+      setCurrentStep(0);
       Alert.alert('Contribution split required', `Please add ${missingContributions.join(' and ')}. Use 0 if not applicable.`);
       return false;
     }
@@ -508,12 +522,14 @@ const NewMeeting = ({ route, authToken }) => {
     const dealerContribution = Number(request.dealerContribution || 0);
 
     if ([companyContribution, dealerContribution].some((amount) => Number.isNaN(amount) || amount < 0)) {
+      setCurrentStep(0);
       Alert.alert('Invalid contribution', 'Company and dealer contribution should be valid non-negative amounts.');
       return false;
     }
 
     const contributionTotal = companyContribution + dealerContribution;
     if (Math.abs(contributionTotal - expectedBudget) > 0.009) {
+      setCurrentStep(0);
       Alert.alert(
         'Budget mismatch',
         `Company + dealer contribution must equal expected budget. Expected Rs. ${expectedBudget}, currently Rs. ${contributionTotal}.`
@@ -528,6 +544,7 @@ const NewMeeting = ({ route, authToken }) => {
     if (!validateRequest()) return false;
     if (!validatePlanForSubmit()) return false;
     if (attendees.length === 0) {
+      setCurrentStep(1);
       Alert.alert('Attendees required', 'Add expected attendees before submitting for approval.');
       return false;
     }
@@ -820,11 +837,12 @@ const NewMeeting = ({ route, authToken }) => {
         options={meetingTypes}
         value={request.meetingType}
         onSelect={(value) => updateRequest('meetingType', value)}
+        required
       />
       <View style={styles.twoColumn}>
         <View style={styles.halfField}>
           <View style={styles.field}>
-            <Text style={styles.label}>Date</Text>
+            <FieldLabel label="Date" required />
             <TouchableOpacity
               style={styles.dateSelectField}
               onPress={() => setIsMeetingDatePickerOpen(true)}
@@ -842,6 +860,7 @@ const NewMeeting = ({ route, authToken }) => {
             label="Time"
             value={request.meetingTime}
             onChange={(value) => updateRequest('meetingTime', value)}
+            required
           />
         </View>
       </View>
@@ -853,6 +872,7 @@ const NewMeeting = ({ route, authToken }) => {
             options={INDIAN_STATE_OPTIONS}
             value={request.state}
             onSelect={selectMeetingState}
+            required
           />
         </View>
         <View style={styles.halfField}>
@@ -863,6 +883,7 @@ const NewMeeting = ({ route, authToken }) => {
             value={request.city}
             onSelect={(value) => updateRequest('city', value)}
             disabled={!request.state}
+            required
           />
         </View>
       </View>
@@ -871,9 +892,13 @@ const NewMeeting = ({ route, authToken }) => {
         onChangeText={(value) => updateRequest('location', value)}
         onUseCurrentLocation={useCurrentLocation}
         isLocating={isLocating}
+        required
       />
       <View style={styles.field}>
-        <Text style={styles.label}>Dealer / Shop</Text>
+        <FieldLabel
+          label="Dealer / Shop"
+          required={['dealer', 'counter'].some((type) => String(request.meetingType || '').toLowerCase().includes(type))}
+        />
         <TouchableOpacity style={styles.dealerSelectButton} onPress={openDealerPicker}>
           <View style={styles.dealerSelectIcon}>
             <Ionicons name="storefront-outline" size={18} color="#4F46E5" />
@@ -899,6 +924,7 @@ const NewMeeting = ({ route, authToken }) => {
         onChangeText={(value) => updateRequest('purpose', value)}
         placeholder="What should this meeting achieve?"
         multiline
+        required
       />
       <Field
         label="Expected Business Impact"
@@ -906,6 +932,7 @@ const NewMeeting = ({ route, authToken }) => {
         onChangeText={(value) => updateRequest('expectedBusinessImpact', value)}
         placeholder="Example: Generate five contractor leads and 20 tonnes expected monthly demand."
         multiline
+        required
       />
       <Field
         label="Expected Turnout"
@@ -913,6 +940,7 @@ const NewMeeting = ({ route, authToken }) => {
         onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))}
         placeholder="Planned total attendees"
         keyboardType="numeric"
+        required
       />
       <Field
         label="Expected Budget"
@@ -920,6 +948,7 @@ const NewMeeting = ({ route, authToken }) => {
         onChangeText={(value) => updateRequest('expectedBudget', value)}
         placeholder="Amount"
         keyboardType="numeric"
+        required
       />
       <Field
         label="Gift / Material Notes"
@@ -931,7 +960,7 @@ const NewMeeting = ({ route, authToken }) => {
       <View style={styles.planCard}>
         <View style={styles.planCardHeader}>
           <View>
-            <Text style={styles.planCardTitle}>Budget Contribution</Text>
+            <Text style={styles.planCardTitle}>Budget Contribution <Text style={styles.requiredStar}>*</Text></Text>
             <Text style={styles.planCardSubtitle}>Company + dealer should equal expected budget.</Text>
           </View>
           <Text style={styles.planBadge}>Rs. {Number(request.expectedBudget || 0)}</Text>
@@ -944,6 +973,7 @@ const NewMeeting = ({ route, authToken }) => {
               onChangeText={(value) => updateRequest('companyContribution', value.replace(/[^\d.]/g, ''))}
               placeholder="Company"
               keyboardType="numeric"
+              required
             />
           </View>
           <View style={styles.halfField}>
@@ -953,6 +983,7 @@ const NewMeeting = ({ route, authToken }) => {
               onChangeText={(value) => updateRequest('dealerContribution', value.replace(/[^\d.]/g, ''))}
               placeholder="Dealer"
               keyboardType="numeric"
+              required
             />
           </View>
         </View>
@@ -968,7 +999,7 @@ const NewMeeting = ({ route, authToken }) => {
       <View style={styles.planCard}>
         <View style={styles.planCardHeader}>
           <View>
-            <Text style={styles.planCardTitle}>Planned Expenses</Text>
+            <Text style={styles.planCardTitle}>Planned Expenses <Text style={styles.requiredStar}>*</Text></Text>
             <Text style={styles.planCardSubtitle}>Required before submit for approval.</Text>
           </View>
           <Text style={styles.planBadge}>Rs. {plannedExpenseTotal}</Text>
@@ -987,6 +1018,7 @@ const NewMeeting = ({ route, authToken }) => {
               options={expenseHeads}
               value={plannedExpenseDraft.expenseHead}
               onSelect={(value) => updatePlannedExpense('expenseHead', value)}
+              required
             />
             <Field
               label="Amount"
@@ -994,6 +1026,7 @@ const NewMeeting = ({ route, authToken }) => {
               onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
               placeholder="Planned amount"
               keyboardType="numeric"
+              required
             />
             <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
               <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
@@ -1024,7 +1057,7 @@ const NewMeeting = ({ route, authToken }) => {
       <View style={styles.planCard}>
         <View style={styles.planCardHeader}>
           <View>
-            <Text style={styles.planCardTitle}>Planned Gifts / Materials</Text>
+            <Text style={styles.planCardTitle}>Planned Gifts / Materials <Text style={styles.requiredStar}>*</Text></Text>
             <Text style={styles.planCardSubtitle}>Enter expected gifts here with item, quantity, and estimated amount.</Text>
           </View>
           <Text style={styles.planBadge}>Rs. {plannedGiftTotal}</Text>
@@ -1043,6 +1076,7 @@ const NewMeeting = ({ route, authToken }) => {
               options={giftItems}
               value={plannedGiftDraft.giftItem}
               onSelect={(value) => updatePlannedGift('giftItem', value)}
+              required
             />
             <View style={styles.twoColumn}>
               <View style={styles.halfField}>
@@ -1052,6 +1086,7 @@ const NewMeeting = ({ route, authToken }) => {
                   onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
                   placeholder="Qty"
                   keyboardType="numeric"
+                  required
                 />
               </View>
               <View style={styles.halfField}>
@@ -1061,6 +1096,7 @@ const NewMeeting = ({ route, authToken }) => {
                   onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
                   placeholder="Amount"
                   keyboardType="numeric"
+                  required
                 />
               </View>
             </View>
@@ -1117,7 +1153,7 @@ const NewMeeting = ({ route, authToken }) => {
   const renderAttendeeStep = () => (
     <View style={styles.section}>
       <Text style={styles.sectionEyebrow}>Step 2 of 3</Text>
-      <Text style={styles.sectionTitle}>Expected Attendees</Text>
+      <Text style={styles.sectionTitle}>Expected Attendees <Text style={styles.requiredStar}>*</Text></Text>
       <Text style={styles.sectionSubtitle}>Expected turnout: {request.expectedTurnout || 0}. Add named attendees separately; mobile numbers must stay unique.</Text>
       <TouchableOpacity style={styles.existingButton} onPress={openAttendeePicker}>
         <Ionicons name="search-outline" size={18} color="#4F46E5" />
@@ -1131,13 +1167,14 @@ const NewMeeting = ({ route, authToken }) => {
               <Ionicons name="close" size={18} color="#64748B" />
             </TouchableOpacity>
           </View>
-          <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => updateAttendee('name', value)} placeholder="Attendee name" />
+          <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => updateAttendee('name', value)} placeholder="Attendee name" required />
           <Field
             label="Mobile Number"
             value={attendeeDraft.mobile}
             onChangeText={(value) => updateAttendee('mobile', normalizeMobile(value))}
             placeholder="10 digit mobile"
             keyboardType="phone-pad"
+            required
           />
           {attendeeCategoryOptions.length > 0 ? (
             <SelectField
@@ -1146,6 +1183,7 @@ const NewMeeting = ({ route, authToken }) => {
               options={attendeeCategoryOptions}
               value={attendeeDraft.category}
               onSelect={(value) => updateAttendee('category', value)}
+              required
             />
           ) : (
             <Field
@@ -1153,6 +1191,7 @@ const NewMeeting = ({ route, authToken }) => {
               value={attendeeDraft.category}
               onChangeText={(value) => updateAttendee('category', value)}
               placeholder="Category from attendee master"
+              required
             />
           )}
           <Field label="City / Area" value={attendeeDraft.cityArea} onChangeText={(value) => updateAttendee('cityArea', value)} placeholder="Area or locality" />
@@ -1233,6 +1272,17 @@ const NewMeeting = ({ route, authToken }) => {
       <Text style={styles.sectionEyebrow}>Step 3 of 3</Text>
       <Text style={styles.sectionTitle}>Review & Submit</Text>
       <Text style={styles.sectionSubtitle}>Check the request before saving draft or submitting for approval.</Text>
+
+      <View style={styles.reviewActionRow}>
+        <TouchableOpacity style={[styles.reviewEditButton, styles.reviewEditButtonGap]} onPress={() => setCurrentStep(0)}>
+          <Ionicons name="create-outline" size={16} color="#4F46E5" />
+          <Text style={styles.reviewEditButtonText}>Edit Request</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.reviewEditButton} onPress={() => setCurrentStep(1)}>
+          <Ionicons name="people-outline" size={16} color="#4F46E5" />
+          <Text style={styles.reviewEditButtonText}>Edit Attendees</Text>
+        </TouchableOpacity>
+      </View>
       
       <View style={styles.reviewGroupCard}>
         <Text style={styles.reviewGroupTitle}>Meeting Details</Text>
@@ -1368,7 +1418,7 @@ const NewMeeting = ({ route, authToken }) => {
       </View>
       
       <View style={styles.reviewGroupCard}>
-        <Text style={styles.reviewGroupTitle}>Named Expected Attendees ({attendees.length})</Text>
+        <Text style={styles.reviewGroupTitle}>Named Expected Attendees ({attendees.length}) <Text style={styles.requiredStar}>*</Text></Text>
         <View style={styles.reviewAttendeeList}>
           {attendees.length === 0 ? (
             <Text style={styles.emptyText}>No named attendees added yet.</Text>
@@ -1604,6 +1654,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#374151',
     marginBottom: 7,
+  },
+  requiredStar: {
+    color: '#EF4444',
   },
   input: {
     borderWidth: 1,
@@ -2041,7 +2094,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0F172A',
     flexShrink: 1,
-    marginRight: 8,
   },
   categoryBadge: {
     paddingHorizontal: 8,
@@ -2080,6 +2132,30 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 10,
     fontStyle: 'italic',
+  },
+  reviewActionRow: {
+    flexDirection: 'row',
+    marginBottom: 14,
+  },
+  reviewEditButtonGap: {
+    marginRight: 8,
+  },
+  reviewEditButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewEditButtonText: {
+    marginLeft: 6,
+    color: '#4F46E5',
+    fontSize: 13,
+    fontWeight: '900',
   },
   reviewGroupCard: {
     backgroundColor: '#FFFFFF',

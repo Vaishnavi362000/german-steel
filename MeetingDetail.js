@@ -227,6 +227,30 @@ const hasFinalReportData = (meeting = {}) => [
   meeting.actualBusinessOutcome,
   meeting.finalRemarks,
 ].some((value) => String(value || '').trim());
+const parseLeadEntries = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  if (!value) return [];
+  const text = String(value).trim();
+  if (!text) return [];
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+  } catch (_error) {
+    // Existing backend data is usually plain text, so fall back to line parsing.
+  }
+
+  return text
+    .split(/\r?\n|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+const getCleanLeadEntries = (entries = []) => entries.map((entry) => String(entry || '').trim()).filter(Boolean);
 const getCorrectionTabForMeeting = (meeting = {}) => {
   const stageValue = meeting?.correctionStage || meeting?.correctionSection || meeting?.stageLabel;
   if (stageValue) return getCorrectionTabFromStage(stageValue);
@@ -285,7 +309,11 @@ const formatLocationAddress = (place, coords) => {
   return `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
 };
 
-const SelectField = ({ label, value, placeholder, options = [], onSelect, disabled = false }) => {
+const FieldLabel = ({ label, required = false }) => (
+  <Text style={styles.label}>{label}{required ? <Text style={styles.requiredStar}> *</Text> : null}</Text>
+);
+
+const SelectField = ({ label, value, placeholder, options = [], onSelect, disabled = false, required = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const safeOptions = Array.isArray(options) ? options : [];
@@ -295,7 +323,7 @@ const SelectField = ({ label, value, placeholder, options = [], onSelect, disabl
 
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+      <FieldLabel label={label} required={required} />
       <TouchableOpacity
         style={[styles.selectField, disabled && styles.inputDisabled]}
         onPress={() => !disabled && setIsOpen(true)}
@@ -363,10 +391,10 @@ const SelectField = ({ label, value, placeholder, options = [], onSelect, disabl
   );
 };
 
-const LocationField = ({ value, onChangeText, onUseCurrentLocation, isLocating }) => (
+const LocationField = ({ value, onChangeText, onUseCurrentLocation, isLocating, required = false }) => (
   <View style={styles.field}>
     <View style={styles.fieldHeader}>
-      <Text style={styles.label}>Location</Text>
+      <FieldLabel label="Location" required={required} />
       <TouchableOpacity style={styles.locationButton} onPress={onUseCurrentLocation} disabled={isLocating}>
         {isLocating ? (
           <ActivityIndicator size="small" color="#4F46E5" />
@@ -414,6 +442,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const [expenseDraft, setExpenseDraft] = useState(emptyExpenseDraft);
   const [expenseRemarks, setExpenseRemarks] = useState('');
   const [reportDraft, setReportDraft] = useState(emptyReportDraft);
+  const [leadEntries, setLeadEntries] = useState([]);
   const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
   const [isCancelPanelOpen, setIsCancelPanelOpen] = useState(false);
   const [cancelRemarks, setCancelRemarks] = useState('');
@@ -553,17 +582,19 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       deriveAttendeeCategoryOptions(normalizedActualAttendees)
     ));
     setExpenseRemarks(data?.expenseRemarks || data?.expenseSubmissionRemarks || '');
+    const initialLeadEntries = parseLeadEntries(data?.leadDetails || data?.interestedCustomers || '');
     setReportDraft({
       meetingSummary: data?.meetingSummary || '',
       keyDiscussionPoints: data?.keyDiscussionPoints || '',
       leadsGenerated: String(data?.leadsGenerated || ''),
-      leadCount: String(data?.leadCount || data?.leadsGenerated || ''),
-      leadDetails: data?.leadDetails || '',
-      interestedCustomers: data?.interestedCustomers || '',
+      leadCount: String(data?.leadCount || data?.leadsGenerated || initialLeadEntries.length || ''),
+      leadDetails: initialLeadEntries.join('\n'),
+      interestedCustomers: '',
       competitorInformation: data?.competitorInformation || '',
       actualBusinessOutcome: data?.actualBusinessOutcome || '',
       finalRemarks: data?.finalRemarks || '',
     });
+    setLeadEntries(initialLeadEntries);
     setIsExecutionStarted(Boolean(data?.actualMeetingDate || data?.actualLocation || isExecutionCompleteStatus(currentStatus)));
     setIsExecutionSubmitted(isExecutionCompleteStatus(currentStatus));
   }, []);
@@ -657,7 +688,16 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       try {
         const storedDraft = await AsyncStorage.getItem(reportDraftStorageKey);
         if (!storedDraft || !isMounted) return;
-        setReportDraft((prev) => ({ ...prev, ...JSON.parse(storedDraft) }));
+        const parsedDraft = JSON.parse(storedDraft);
+        const parsedLeadEntries = parseLeadEntries(parsedDraft.leadEntries || parsedDraft.leadDetails);
+        setLeadEntries(parsedLeadEntries);
+        setReportDraft((prev) => ({
+          ...prev,
+          ...parsedDraft,
+          leadCount: String(parsedDraft.leadCount || parsedLeadEntries.length || ''),
+          leadDetails: parsedLeadEntries.join('\n'),
+          interestedCustomers: '',
+        }));
       } catch (draftError) {
         console.warn('Unable to load local report draft:', draftError.message);
       }
@@ -683,9 +723,23 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     () => actualAttendance.filter((attendee) => attendee.attended || attendee.present),
     [actualAttendance]
   );
-  const giftItemOptions = useMemo(
-    () => mergeOptions(giftItems, giftLines.map((gift) => gift.giftItem)),
-    [giftItems, giftLines]
+  const walkInMobile = useMemo(() => normalizeMobile(walkInDraft.mobile), [walkInDraft.mobile]);
+  const walkInExistingContact = useMemo(() => {
+    if (walkInMobile.length !== 10) return null;
+    return attendeeMaster.find((attendee) => normalizeMobile(attendee.mobile || attendee.mobileNumber) === walkInMobile) || null;
+  }, [attendeeMaster, walkInMobile]);
+  const isWalkInMobileAlreadyInMeeting = useMemo(
+    () => walkInMobile.length === 10 && actualAttendance.some((attendee) => normalizeMobile(attendee.mobile) === walkInMobile),
+    [actualAttendance, walkInMobile]
+  );
+  const plannedGiftLines = useMemo(() => (Array.isArray(meeting?.plannedGifts) ? meeting.plannedGifts : []), [meeting]);
+  const planGiftItemOptions = useMemo(
+    () => mergeOptions(giftItems, plannedGifts.map((gift) => gift.giftItem)),
+    [giftItems, plannedGifts]
+  );
+  const approvedGiftItemOptions = useMemo(
+    () => mergeOptions(plannedGiftLines.map((gift) => gift.giftItem || gift.item), plannedGifts.map((gift) => gift.giftItem)),
+    [plannedGiftLines, plannedGifts]
   );
   const expenseHeadOptions = useMemo(
     () => mergeOptions(expenseHeads, expenseLines.map((expense) => expense.expenseHead)),
@@ -699,7 +753,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     () => expenseLines.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
     [expenseLines]
   );
-  const plannedGiftLines = useMemo(() => (Array.isArray(meeting?.plannedGifts) ? meeting.plannedGifts : []), [meeting]);
   const plannedExpenseTotal = useMemo(
     () => plannedExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0),
     [plannedExpenses]
@@ -708,6 +761,9 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     () => plannedGifts.reduce((sum, item) => sum + Number(item.estimatedAmount || 0), 0),
     [plannedGifts]
   );
+  const cleanLeadEntries = useMemo(() => getCleanLeadEntries(leadEntries), [leadEntries]);
+  const reportLeadCount = cleanLeadEntries.length;
+  const reportLeadDetails = cleanLeadEntries.join('\n');
   const requestCityOptions = getCityOptionsForState(requestDraft.state);
   const expectedBudget = Number(request.expectedBudget || 0);
   const expectedTurnoutValue = Number(request.expectedTurnout || request.expectedAttendeeCount || expectedAttendees.length || 0);
@@ -776,6 +832,52 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
   const updateReportDraft = (field, value) => {
     setReportDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const syncLeadEntries = (nextEntries) => {
+    const nextCleanEntries = getCleanLeadEntries(nextEntries);
+    setLeadEntries(nextEntries);
+    setReportDraft((prev) => ({
+      ...prev,
+      leadCount: String(nextCleanEntries.length),
+      leadsGenerated: String(nextCleanEntries.length),
+      leadDetails: nextCleanEntries.join('\n'),
+      interestedCustomers: '',
+    }));
+  };
+
+  const toggleLeadFromAttendee = (attendee = {}) => {
+    const leadName = String(attendee.name || '').trim();
+    if (!leadName) return;
+    const existingIndex = leadEntries.findIndex((entry) => String(entry || '').trim().toLowerCase() === leadName.toLowerCase());
+    if (existingIndex >= 0) {
+      syncLeadEntries(leadEntries.filter((_, index) => index !== existingIndex));
+      return;
+    }
+    syncLeadEntries([...leadEntries, leadName]);
+  };
+
+  const addAllAttendeesAsLeads = () => {
+    const existingKeys = new Set(leadEntries.map((entry) => String(entry || '').trim().toLowerCase()).filter(Boolean));
+    const nextEntries = [...leadEntries];
+    presentAttendees.forEach((attendee) => {
+      const leadName = String(attendee.name || '').trim();
+      if (!leadName) return;
+      const key = leadName.toLowerCase();
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        nextEntries.push(leadName);
+      }
+    });
+    syncLeadEntries(nextEntries);
+  };
+
+  const updateLeadEntry = (index, value) => {
+    syncLeadEntries(leadEntries.map((entry, itemIndex) => (itemIndex === index ? value : entry)));
+  };
+
+  const removeLeadEntry = (index) => {
+    syncLeadEntries(leadEntries.filter((_, itemIndex) => itemIndex !== index));
   };
 
   const validateRequest = () => {
@@ -1244,6 +1346,37 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     setIsWalkInFormOpen(false);
   };
 
+  const quickAddExistingWalkIn = (attendee) => {
+    const mobile = normalizeMobile(attendee?.mobile || attendee?.mobileNumber);
+    if (mobile.length !== 10) {
+      Alert.alert('Invalid contact', 'This saved attendee does not have a valid 10 digit mobile number.');
+      return;
+    }
+
+    if (actualAttendance.some((item) => normalizeMobile(item.mobile) === mobile)) {
+      Alert.alert('Already in meeting', 'This mobile number is already in this meeting. Mark that attendee present instead.');
+      return;
+    }
+
+    setActualAttendance((prev) => [
+      ...prev,
+      {
+        name: attendee.name || '',
+        mobile,
+        email: attendee.email || '',
+        category: attendee.category || '',
+        cityArea: attendee.cityArea || '',
+        company: attendee.company || attendee.companyShopProject || '',
+        id: `walk-in-master-${attendee.id || attendee.attendeeId || mobile}`,
+        source: 'walkIn',
+        expected: false,
+        attended: true,
+      },
+    ]);
+    setWalkInDraft(emptyWalkInAttendee);
+    setIsWalkInFormOpen(false);
+  };
+
   const submitExecution = async () => {
     const missingFields = [
       ['actualMeetingDate', 'actual date'],
@@ -1365,6 +1498,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
     if (!giftItem || Number.isNaN(quantity) || quantity <= 0) {
       Alert.alert('Invalid gift', 'Enter a gift item and valid quantity.');
+      return;
+    }
+
+    const isApprovedGift = approvedGiftItemOptions.some(
+      (item) => String(item || '').trim().toLowerCase() === giftItem.toLowerCase()
+    );
+    if (!isApprovedGift) {
+      Alert.alert('Gift not approved', 'Select a gift from the approved planned gift list for this meeting.');
       return;
     }
 
@@ -1595,7 +1736,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     if (!reportDraftStorageKey) return;
 
     try {
-      await AsyncStorage.setItem(reportDraftStorageKey, JSON.stringify(reportDraft));
+      await AsyncStorage.setItem(reportDraftStorageKey, JSON.stringify({
+        ...reportDraft,
+        leadEntries,
+        leadCount: String(reportLeadCount),
+        leadsGenerated: String(reportLeadCount),
+        leadDetails: reportLeadDetails,
+        interestedCustomers: '',
+      }));
       Alert.alert('Draft saved', 'Report draft saved on this device.');
     } catch (draftError) {
       console.error('Error saving report draft:', draftError.message);
@@ -1611,8 +1759,10 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
     const reportPayload = {
       ...reportDraft,
-      leadsGenerated: reportDraft.leadCount || reportDraft.leadsGenerated || '',
-      leadCount: Number(reportDraft.leadCount || reportDraft.leadsGenerated || 0),
+      leadsGenerated: String(reportLeadCount),
+      leadCount: reportLeadCount,
+      leadDetails: reportLeadDetails,
+      interestedCustomers: '',
     };
 
     try {
@@ -1636,9 +1786,9 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     }
   };
 
-  const Field = useCallback(({ label, value, onChangeText, placeholder, keyboardType = 'default', multiline = false, editable = true }) => (
+  const Field = useCallback(({ label, value, onChangeText, placeholder, keyboardType = 'default', multiline = false, editable = true, required = false }) => (
     <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+      <FieldLabel label={label} required={required} />
       <TextInput
         style={[styles.input, multiline && styles.textArea, !editable && styles.inputDisabled]}
         value={String(value || '')}
@@ -1722,11 +1872,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             options={meetingTypes}
             value={requestDraft.meetingType}
             onSelect={(value) => updateRequest('meetingType', value)}
+            required
           />
           <View style={styles.twoColumn}>
             <View style={styles.halfField}>
               <View style={styles.field}>
-                <Text style={styles.label}>Date</Text>
+                <FieldLabel label="Date" required />
                 <TouchableOpacity
                   style={styles.dateSelectField}
                   onPress={() => setIsRequestDatePickerOpen(true)}
@@ -1740,7 +1891,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               </View>
             </View>
             <View style={styles.halfField}>
-              <MeetingTimePicker label="Time" value={requestDraft.meetingTime} onChange={(value) => updateRequest('meetingTime', value)} />
+              <MeetingTimePicker label="Time" value={requestDraft.meetingTime} onChange={(value) => updateRequest('meetingTime', value)} required />
             </View>
           </View>
           <View style={styles.twoColumn}>
@@ -1751,6 +1902,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 options={INDIAN_STATE_OPTIONS}
                 value={requestDraft.state}
                 onSelect={selectRequestState}
+                required
               />
             </View>
             <View style={styles.halfField}>
@@ -1761,12 +1913,16 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 value={requestDraft.city}
                 onSelect={(value) => updateRequest('city', value)}
                 disabled={!requestDraft.state}
+                required
               />
             </View>
           </View>
-          <LocationField value={requestDraft.location} onChangeText={(value) => updateRequest('location', value)} onUseCurrentLocation={useCurrentLocation} isLocating={isLocating} />
+          <LocationField value={requestDraft.location} onChangeText={(value) => updateRequest('location', value)} onUseCurrentLocation={useCurrentLocation} isLocating={isLocating} required />
           <View style={styles.field}>
-            <Text style={styles.label}>Dealer / Shop</Text>
+            <FieldLabel
+              label="Dealer / Shop"
+              required={['dealer', 'counter'].some((type) => String(requestDraft.meetingType || '').toLowerCase().includes(type))}
+            />
             <TouchableOpacity style={styles.dealerSelectButton} onPress={openDealerPicker}>
               <View style={styles.dealerSelectIcon}>
                 <Ionicons name="storefront-outline" size={18} color="#4F46E5" />
@@ -1781,15 +1937,15 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             </TouchableOpacity>
           </View>
           <Field label="Additional Customer Reference" value={requestDraft.referenceName} onChangeText={(value) => updateRequest('referenceName', value)} placeholder="Optional extra context" />
-          <Field label="Purpose / Objective" value={requestDraft.purpose} onChangeText={(value) => updateRequest('purpose', value)} placeholder="Purpose" multiline />
-          <Field label="Expected Business Impact" value={requestDraft.expectedBusinessImpact} onChangeText={(value) => updateRequest('expectedBusinessImpact', value)} placeholder="Expected business result" multiline />
-          <Field label="Expected Turnout" value={requestDraft.expectedTurnout} onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))} placeholder="Planned total attendees" keyboardType="numeric" />
-          <Field label="Expected Budget" value={requestDraft.expectedBudget} onChangeText={(value) => updateRequest('expectedBudget', value)} placeholder="Amount" keyboardType="numeric" />
+          <Field label="Purpose / Objective" value={requestDraft.purpose} onChangeText={(value) => updateRequest('purpose', value)} placeholder="Purpose" multiline required />
+          <Field label="Expected Business Impact" value={requestDraft.expectedBusinessImpact} onChangeText={(value) => updateRequest('expectedBusinessImpact', value)} placeholder="Expected business result" multiline required />
+          <Field label="Expected Turnout" value={requestDraft.expectedTurnout} onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))} placeholder="Planned total attendees" keyboardType="numeric" required />
+          <Field label="Expected Budget" value={requestDraft.expectedBudget} onChangeText={(value) => updateRequest('expectedBudget', value)} placeholder="Amount" keyboardType="numeric" required />
           <Field label="Gift / Material Notes" value={requestDraft.expectedMaterials} onChangeText={(value) => updateRequest('expectedMaterials', value)} placeholder="Optional notes, e.g. brochures or samples to carry" multiline />
           <View style={styles.planCard}>
             <View style={styles.planCardHeader}>
               <View>
-                <Text style={styles.planCardTitle}>Budget Contribution</Text>
+                <Text style={styles.planCardTitle}>Budget Contribution <Text style={styles.requiredStar}>*</Text></Text>
                 <Text style={styles.planCardSubtitle}>Company + dealer must equal expected budget.</Text>
               </View>
               <Text style={styles.planBadge}>Rs. {Number(requestDraft.expectedBudget || 0)}</Text>
@@ -1802,6 +1958,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   onChangeText={(value) => updateRequest('companyContribution', value.replace(/[^\d.]/g, ''))}
                   placeholder="Company"
                   keyboardType="numeric"
+                  required
                 />
               </View>
               <View style={styles.halfField}>
@@ -1811,6 +1968,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   onChangeText={(value) => updateRequest('dealerContribution', value.replace(/[^\d.]/g, ''))}
                   placeholder="Dealer"
                   keyboardType="numeric"
+                  required
                 />
               </View>
             </View>
@@ -1826,7 +1984,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           <View style={styles.planCard}>
             <View style={styles.planCardHeader}>
               <View>
-                <Text style={styles.planCardTitle}>Planned Expenses</Text>
+                <Text style={styles.planCardTitle}>Planned Expenses <Text style={styles.requiredStar}>*</Text></Text>
                 <Text style={styles.planCardSubtitle}>Required before submit for approval.</Text>
               </View>
               <Text style={styles.planBadge}>Rs. {plannedExpenseTotal}</Text>
@@ -1845,6 +2003,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   options={expenseHeadOptions}
                   value={plannedExpenseDraft.expenseHead}
                   onSelect={(value) => updatePlannedExpense('expenseHead', value)}
+                  required
                 />
                 <Field
                   label="Amount"
@@ -1852,6 +2011,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   onChangeText={(value) => updatePlannedExpense('amount', value.replace(/[^\d.]/g, ''))}
                   placeholder="Planned amount"
                   keyboardType="numeric"
+                  required
                 />
                 <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
                   <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
@@ -1882,7 +2042,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           <View style={styles.planCard}>
             <View style={styles.planCardHeader}>
               <View>
-                <Text style={styles.planCardTitle}>Planned Gifts / Materials</Text>
+                <Text style={styles.planCardTitle}>Planned Gifts / Materials <Text style={styles.requiredStar}>*</Text></Text>
                 <Text style={styles.planCardSubtitle}>Enter item, quantity, and estimated amount.</Text>
               </View>
               <Text style={styles.planBadge}>Rs. {plannedGiftTotal}</Text>
@@ -1898,9 +2058,10 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 <SelectField
                   label="Gift Item"
                   placeholder="Select gift item"
-                  options={giftItemOptions}
+                  options={planGiftItemOptions}
                   value={plannedGiftDraft.giftItem}
                   onSelect={(value) => updatePlannedGift('giftItem', value)}
+                  required
                 />
                 <View style={styles.twoColumn}>
                   <View style={styles.halfField}>
@@ -1910,6 +2071,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                       onChangeText={(value) => updatePlannedGift('quantity', value.replace(/\D/g, ''))}
                       placeholder="Qty"
                       keyboardType="numeric"
+                      required
                     />
                   </View>
                   <View style={styles.halfField}>
@@ -1919,6 +2081,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                       onChangeText={(value) => updatePlannedGift('estimatedAmount', value.replace(/[^\d.]/g, ''))}
                       placeholder="Amount"
                       keyboardType="numeric"
+                      required
                     />
                   </View>
                 </View>
@@ -2153,7 +2316,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
   const renderAttendeesTab = () => (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Named Expected Attendees ({attendeeCount})</Text>
+      <Text style={styles.sectionTitle}>Named Expected Attendees ({attendeeCount}) <Text style={styles.requiredStar}>*</Text></Text>
       <Text style={styles.helperText}>Expected turnout: {expectedTurnoutValue || 0}</Text>
       {isEditable && (
         <>
@@ -2169,12 +2332,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   <Ionicons name="close" size={18} color="#64748B" />
                 </TouchableOpacity>
               </View>
-              <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, name: value }))} placeholder="Attendee name" />
-              <Field label="Mobile" value={attendeeDraft.mobile} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, mobile: normalizeMobile(value) }))} placeholder="10 digit mobile" keyboardType="phone-pad" />
+              <Field label="Name" value={attendeeDraft.name} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, name: value }))} placeholder="Attendee name" required />
+              <Field label="Mobile" value={attendeeDraft.mobile} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, mobile: normalizeMobile(value) }))} placeholder="10 digit mobile" keyboardType="phone-pad" required />
               {attendeeCategoryOptions.length > 0 ? (
-                <SelectField label="Category" placeholder="Select category" options={attendeeCategoryOptions} value={attendeeDraft.category} onSelect={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} />
+                <SelectField label="Category" placeholder="Select category" options={attendeeCategoryOptions} value={attendeeDraft.category} onSelect={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} required />
               ) : (
-                <Field label="Category" value={attendeeDraft.category} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} placeholder="Category from attendee master" />
+                <Field label="Category" value={attendeeDraft.category} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, category: value }))} placeholder="Category from attendee master" required />
               )}
               <Field label="City / Area" value={attendeeDraft.cityArea} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, cityArea: value }))} placeholder="Area" />
               <Field label="Company / Shop / Project" value={attendeeDraft.company} onChangeText={(value) => setAttendeeDraft((prev) => ({ ...prev, company: value }))} placeholder="Optional" />
@@ -2300,7 +2463,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 <View style={styles.twoColumn}>
                   <View style={styles.halfField}>
                     <View style={styles.field}>
-                      <Text style={styles.label}>Actual Date</Text>
+                      <FieldLabel label="Actual Date" required />
                       <TouchableOpacity
                         style={styles.dateSelectField}
                         onPress={() => setIsExecutionDatePickerOpen(true)}
@@ -2318,6 +2481,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                       label="Actual Time"
                       value={executionDraft.actualMeetingTime}
                       onChange={(value) => updateExecution('actualMeetingTime', value)}
+                      required
                     />
                   </View>
                 </View>
@@ -2326,6 +2490,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   onChangeText={(value) => updateExecution('actualLocation', value)}
                   onUseCurrentLocation={useCurrentExecutionLocation}
                   isLocating={isLocating}
+                  required
                 />
               </View>
             ) : (
@@ -2393,6 +2558,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                     value={walkInDraft.name}
                     onChangeText={(value) => updateWalkIn('name', value)}
                     placeholder="Walk-in attendee name"
+                    required
                   />
                   <Field
                     label="Mobile"
@@ -2400,7 +2566,32 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                     onChangeText={(value) => updateWalkIn('mobile', normalizeMobile(value))}
                     placeholder="10 digit mobile"
                     keyboardType="phone-pad"
+                    required
                   />
+                  {walkInMobile.length === 10 && walkInExistingContact ? (
+                    <View style={styles.walkInMatchCard}>
+                      <View style={styles.walkInMatchIcon}>
+                        <Ionicons name="person-circle-outline" size={22} color="#4F46E5" />
+                      </View>
+                      <View style={styles.walkInMatchBody}>
+                        <Text style={styles.walkInMatchTitle} numberOfLines={1}>{walkInExistingContact.name || 'Saved attendee'}</Text>
+                        <Text style={styles.walkInMatchMeta} numberOfLines={1}>
+                          {[walkInExistingContact.mobileNumber || walkInExistingContact.mobile, walkInExistingContact.category, walkInExistingContact.cityArea]
+                            .filter(Boolean)
+                            .join(' - ')}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={[styles.walkInMatchButton, isWalkInMobileAlreadyInMeeting && styles.walkInMatchButtonDisabled]}
+                        onPress={() => quickAddExistingWalkIn(walkInExistingContact)}
+                        disabled={isWalkInMobileAlreadyInMeeting}
+                      >
+                        <Text style={[styles.walkInMatchButtonText, isWalkInMobileAlreadyInMeeting && styles.walkInMatchButtonTextDisabled]}>
+                          {isWalkInMobileAlreadyInMeeting ? 'Added' : 'Quick Add'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
                   {attendeeCategoryOptions.length > 0 ? (
                     <SelectField
                       label="Category"
@@ -2408,6 +2599,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                       options={attendeeCategoryOptions}
                       value={walkInDraft.category}
                       onSelect={(value) => updateWalkIn('category', value)}
+                      required
                     />
                   ) : (
                     <Field
@@ -2415,6 +2607,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                       value={walkInDraft.category}
                       onChangeText={(value) => updateWalkIn('category', value)}
                       placeholder="Category from attendee master"
+                      required
                     />
                   )}
                   <Field
@@ -2504,7 +2697,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             <Text style={styles.emptyText}>No actual attendees marked present yet.</Text>
           </View>
         ) : null}
-        {presentAttendees.length > 0 && canAddGiftIssue && !noGiftsMarked ? (
+        {presentAttendees.length > 0 && canAddGiftIssue && approvedGiftItemOptions.length === 0 && !noGiftsMarked ? (
+          <View style={styles.detailGroupCard}>
+            <Text style={styles.emptyText}>No approved planned gifts are available for this meeting. Mark no gifts if nothing was issued.</Text>
+          </View>
+        ) : null}
+        {presentAttendees.length > 0 && canAddGiftIssue && approvedGiftItemOptions.length > 0 && !noGiftsMarked ? (
           <>
             <View style={styles.detailGroupCard}>
               <View style={styles.cardTitleRow}>
@@ -2545,9 +2743,10 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 <SelectField
                   label="Gift / Item"
                   placeholder="Select gift item"
-                  options={giftItemOptions}
+                  options={approvedGiftItemOptions}
                   value={giftDraft.giftItem}
                   onSelect={(value) => updateGiftDraft('giftItem', value)}
+                  required
                 />
                 <Field
                   label="Quantity"
@@ -2555,6 +2754,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   onChangeText={(value) => updateGiftDraft('quantity', value.replace(/\D/g, ''))}
                   placeholder="Quantity"
                   keyboardType="numeric"
+                  required
                 />
                 <Field
                   label="Remarks"
@@ -2689,6 +2889,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               options={expenseHeadOptions}
               value={expenseDraft.expenseHead}
               onSelect={(value) => updateExpenseDraft('expenseHead', value)}
+              required
             />
             <Field
               label="Amount"
@@ -2696,6 +2897,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               onChangeText={(value) => updateExpenseDraft('amount', value.replace(/[^\d.]/g, ''))}
               placeholder="Amount"
               keyboardType="numeric"
+              required
             />
             <SelectField
               label="Paid By"
@@ -2703,6 +2905,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               options={['COMPANY', 'DEALER', 'SHARED']}
               value={expenseDraft.paidBy}
               onSelect={(value) => updateExpenseDraft('paidBy', value)}
+              required
             />
             {expenseDraft.paidBy === 'SHARED' ? (
               <View style={styles.twoColumn}>
@@ -2713,6 +2916,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                     onChangeText={(value) => updateExpenseDraft('companyAmount', value.replace(/[^\d.]/g, ''))}
                     placeholder="Company"
                     keyboardType="numeric"
+                    required
                   />
                 </View>
                 <View style={styles.halfField}>
@@ -2722,12 +2926,13 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                     onChangeText={(value) => updateExpenseDraft('dealerAmount', value.replace(/[^\d.]/g, ''))}
                     placeholder="Dealer"
                     keyboardType="numeric"
+                    required
                   />
                 </View>
               </View>
             ) : null}
             <View style={styles.field}>
-              <Text style={styles.label}>Expense Date</Text>
+              <FieldLabel label="Expense Date" required />
               <TouchableOpacity
                 style={styles.dateSelectField}
                 onPress={() => setIsExpenseDatePickerOpen(true)}
@@ -2798,6 +3003,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             onChangeText={setExpenseRemarks}
             placeholder="Required because actual expense is higher"
             multiline
+            required
           />
         ) : (
           <Field
@@ -2895,18 +3101,77 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
         <View style={styles.detailGroupCard}>
           <Text style={styles.groupCardTitle}>Report Details</Text>
-          <Field label="Meeting Summary" value={reportDraft.meetingSummary} onChangeText={(value) => updateReportDraft('meetingSummary', value)} placeholder="What happened in the meeting?" multiline editable={canSubmitReport} />
+          <Field label="Meeting Summary" value={reportDraft.meetingSummary} onChangeText={(value) => updateReportDraft('meetingSummary', value)} placeholder="What happened in the meeting?" multiline editable={canSubmitReport} required />
           <Field label="Key Discussion Points" value={reportDraft.keyDiscussionPoints} onChangeText={(value) => updateReportDraft('keyDiscussionPoints', value)} placeholder="Pricing, availability, objections, etc." multiline editable={canSubmitReport} />
           <Field label="Competitor Information" value={reportDraft.competitorInformation} onChangeText={(value) => updateReportDraft('competitorInformation', value)} placeholder="Optional competitor notes" multiline editable={canSubmitReport} />
-          <Field label="Actual Business Outcome" value={reportDraft.actualBusinessOutcome} onChangeText={(value) => updateReportDraft('actualBusinessOutcome', value)} placeholder="Actual result from this meeting" multiline editable={canSubmitReport} />
+          <Field label="Actual Business Outcome" value={reportDraft.actualBusinessOutcome} onChangeText={(value) => updateReportDraft('actualBusinessOutcome', value)} placeholder="Actual result from this meeting" multiline editable={canSubmitReport} required />
           <Field label="Final Remarks" value={reportDraft.finalRemarks} onChangeText={(value) => updateReportDraft('finalRemarks', value)} placeholder="Final remarks" multiline editable={canSubmitReport} />
         </View>
 
         <View style={styles.detailGroupCard}>
-          <Text style={styles.groupCardTitle}>Leads</Text>
-          <Field label="Lead Count" value={reportDraft.leadCount} onChangeText={(value) => updateReportDraft('leadCount', value.replace(/\D/g, ''))} placeholder="Number of leads" keyboardType="numeric" editable={canSubmitReport} />
-          <Field label="Lead Details" value={reportDraft.leadDetails} onChangeText={(value) => updateReportDraft('leadDetails', value)} placeholder="Lead names, projects, quantities, or next steps" multiline editable={canSubmitReport} />
-          <Field label="Interested Customers / Contractors" value={reportDraft.interestedCustomers} onChangeText={(value) => updateReportDraft('interestedCustomers', value)} placeholder="Names or notes" multiline editable={canSubmitReport} />
+          <View style={styles.leadHeaderRow}>
+            <Text style={[styles.groupCardTitle, styles.groupCardTitleInline]}>Leads</Text>
+            <View style={styles.leadCountBadge}>
+              <Text style={styles.leadCountText}>{reportLeadCount} lead(s)</Text>
+            </View>
+          </View>
+          <Text style={styles.giftHelperText}>Pick leads from actual present attendees. You can edit each selected name before submitting.</Text>
+          {canSubmitReport && presentAttendees.length > 0 ? (
+            <TouchableOpacity style={styles.addInlineButton} onPress={addAllAttendeesAsLeads}>
+              <Ionicons name="people-outline" size={18} color="#4F46E5" />
+              <Text style={styles.addInlineButtonText}>Add All Present Attendees</Text>
+            </TouchableOpacity>
+          ) : null}
+          {presentAttendees.length > 0 ? (
+            <View style={styles.leadAttendeeGrid}>
+              {presentAttendees.map((attendee) => {
+                const attendeeName = String(attendee.name || '').trim();
+                const isSelectedLead = leadEntries.some((entry) => String(entry || '').trim().toLowerCase() === attendeeName.toLowerCase());
+                return (
+                  <TouchableOpacity
+                    key={attendee.id || attendee.mobile || attendeeName}
+                    style={[styles.leadAttendeeChip, isSelectedLead && styles.leadAttendeeChipActive]}
+                    onPress={() => canSubmitReport && toggleLeadFromAttendee(attendee)}
+                    disabled={!canSubmitReport || !attendeeName}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons
+                      name={isSelectedLead ? 'checkmark-circle' : 'add-circle-outline'}
+                      size={16}
+                      color={isSelectedLead ? '#16A34A' : '#4F46E5'}
+                    />
+                    <Text style={[styles.leadAttendeeChipText, isSelectedLead && styles.leadAttendeeChipTextActive]} numberOfLines={1}>
+                      {attendeeName || 'Unnamed'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : (
+            <Text style={styles.emptyText}>No present attendees available for lead selection.</Text>
+          )}
+
+          <View style={styles.leadEntryList}>
+            {leadEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No leads selected yet.</Text>
+            ) : leadEntries.map((entry, index) => (
+              <View key={`lead-${index}`} style={styles.leadEntryRow}>
+                <TextInput
+                  style={styles.leadEntryInput}
+                  value={entry}
+                  onChangeText={(value) => updateLeadEntry(index, value)}
+                  placeholder="Lead name or detail"
+                  placeholderTextColor="#94A3B8"
+                  editable={canSubmitReport}
+                />
+                {canSubmitReport ? (
+                  <TouchableOpacity style={styles.leadRemoveButton} onPress={() => removeLeadEntry(index)}>
+                    <Ionicons name="close-circle" size={20} color="#EF4444" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ))}
+          </View>
         </View>
 
         {canSubmitReport ? (
@@ -2929,7 +3194,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 <Text style={styles.reportPreviewText}>Attendance: {attendanceSummaryText}</Text>
                 <Text style={styles.reportPreviewText}>Gifts: {giftSummaryText}</Text>
                 <Text style={styles.reportPreviewText}>Expenses: {expenseSummaryText}</Text>
-                <Text style={styles.reportPreviewText}>Leads: {reportDraft.leadCount || 0} - {reportDraft.leadDetails || 'No lead details'}</Text>
+                <Text style={styles.reportPreviewText}>Leads: {reportLeadCount} - {reportLeadDetails || 'No lead details'}</Text>
                 <Text style={styles.reportPreviewText}>Outcome: {reportDraft.actualBusinessOutcome || 'Not added'}</Text>
               </View>
             ) : null}
@@ -3254,6 +3519,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#374151',
     marginBottom: 7,
+  },
+  requiredStar: {
+    color: '#EF4444',
   },
   input: {
     borderWidth: 1,
@@ -3777,6 +4045,86 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: 12,
   },
+  leadHeaderRow: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  leadCountBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  leadCountText: {
+    color: '#047857',
+    fontSize: 11.5,
+    fontWeight: '900',
+  },
+  leadAttendeeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  leadAttendeeChip: {
+    maxWidth: '48%',
+    minHeight: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  leadAttendeeChipActive: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
+  leadAttendeeChipText: {
+    marginLeft: 5,
+    color: '#4F46E5',
+    fontSize: 12,
+    fontWeight: '900',
+    flexShrink: 1,
+  },
+  leadAttendeeChipTextActive: {
+    color: '#15803D',
+  },
+  leadEntryList: {
+    marginTop: 6,
+  },
+  leadEntryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 9,
+  },
+  leadEntryInput: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  leadRemoveButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+  },
   smallPillButton: {
     minHeight: 32,
     paddingHorizontal: 11,
@@ -3933,6 +4281,60 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: 12,
     fontWeight: '800',
+  },
+  walkInMatchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: -4,
+    marginBottom: 13,
+  },
+  walkInMatchIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  walkInMatchBody: {
+    flex: 1,
+  },
+  walkInMatchTitle: {
+    color: '#1E1B4B',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  walkInMatchMeta: {
+    color: '#64748B',
+    fontSize: 11.5,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  walkInMatchButton: {
+    minHeight: 32,
+    borderRadius: 16,
+    backgroundColor: '#4F46E5',
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  walkInMatchButtonDisabled: {
+    backgroundColor: '#CBD5E1',
+  },
+  walkInMatchButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
+    fontWeight: '900',
+  },
+  walkInMatchButtonTextDisabled: {
+    color: '#64748B',
   },
   executionAttendeeCard: {
     flexDirection: 'row',

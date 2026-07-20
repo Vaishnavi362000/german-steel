@@ -98,7 +98,7 @@ const WheelColumn = ({ label, options, value, renderValue, onSelect }) => {
   );
 };
 
-const MeetingTimePicker = ({ label = 'Time', value, onChange, placeholder = 'Select time' }) => {
+const MeetingTimePicker = ({ label = 'Time', value, onChange, placeholder = 'Select time', required = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [draftTime, setDraftTime] = useState(() => parseApiTime(value) || getCurrentTimeParts());
 
@@ -126,7 +126,7 @@ const MeetingTimePicker = ({ label = 'Time', value, onChange, placeholder = 'Sel
 
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.label}>{label}{required ? <Text style={styles.requiredStar}> *</Text> : null}</Text>
       <TouchableOpacity style={styles.timeSelect} onPress={() => setIsOpen(true)} activeOpacity={0.85}>
         <View style={styles.timeIcon}>
           <Ionicons name="time-outline" size={18} color="#4F46E5" />
@@ -210,6 +210,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#374151',
     marginBottom: 7,
+  },
+  requiredStar: {
+    color: '#EF4444',
   },
   timeSelect: {
     minHeight: 48,

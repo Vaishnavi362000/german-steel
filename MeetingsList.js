@@ -2,7 +2,9 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Modal,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -24,6 +26,9 @@ const filters = [
   { key: 'scheduled', label: 'Scheduled' },
   { key: 'completed', label: 'Completed' },
 ];
+
+const monthOptions = moment.months().map((label, index) => ({ label, value: index }));
+const yearOptions = [2026, 2027, 2028, 2029, 2030];
 
 const getMeetingId = (meeting) => meeting?.id || meeting?.meetingId;
 const getRequest = (meeting) => meeting?.request || meeting || {};
@@ -56,12 +61,27 @@ const getSoftStatusColor = (status) => {
   }
 };
 
-const getDateRange = () => {
-  const today = moment();
-  const start = today.clone().subtract(180, 'days').format('YYYY-MM-DD');
-  const end = today.clone().add(180, 'days').format('YYYY-MM-DD');
+const getDateRange = (month, year) => {
+  const selected = moment({ year, month, day: 1 });
+  const start = selected.clone().startOf('month').format('YYYY-MM-DD');
+  const end = selected.clone().endOf('month').format('YYYY-MM-DD');
   return { start, end };
 };
+
+const formatCardTime = (time) => {
+  if (!time) return '';
+  const parsed = moment(String(time), ['HH:mm:ss', 'HH:mm'], true);
+  return parsed.isValid() ? parsed.format('hh:mm A') : String(time);
+};
+
+const isAttendeePresent = (attendee = {}) => Boolean(attendee.present || attendee.attended || attendee.actualAttendance);
+const getAttendeeName = (attendee = {}) => attendee.name
+  || attendee.attendeeName
+  || attendee.customerName
+  || attendee.contractorName
+  || attendee.mobileNumber
+  || attendee.mobile
+  || '';
 
 const getMeetingGroup = (meeting) => {
   const status = getStatus(meeting);
@@ -97,6 +117,10 @@ const MeetingsList = ({ authToken }) => {
   const navigation = useNavigation();
   const [meetings, setMeetings] = useState([]);
   const [activeFilter, setActiveFilter] = useState('needsAction');
+  const [selectedMonth, setSelectedMonth] = useState(moment().month());
+  const [selectedYear, setSelectedYear] = useState(moment().year());
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [openFilterDropdown, setOpenFilterDropdown] = useState(null);
   const [searchText, setSearchText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -105,7 +129,7 @@ const MeetingsList = ({ authToken }) => {
     try {
       setIsLoading(true);
       setError('');
-      const { start, end } = getDateRange();
+      const { start, end } = getDateRange(selectedMonth, selectedYear);
       const data = await listMeetings({
         authToken,
         scope: 'mine',
@@ -120,7 +144,7 @@ const MeetingsList = ({ authToken }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [authToken]);
+  }, [authToken, selectedMonth, selectedYear]);
 
   useFocusEffect(
     useCallback(() => {
@@ -182,10 +206,21 @@ const MeetingsList = ({ authToken }) => {
     const request = getRequest(item);
     const status = getStatus(item);
     const meetingId = getMeetingId(item);
+    const meetingGroup = getMeetingGroup(item);
     const attendeeCount = request.expectedAttendeeCount
       || (Array.isArray(item.expectedAttendees) ? item.expectedAttendees.length : item.expectedAttendees)
       || 0;
+    const attendedCount = item.actualAttendeeCount
+      || (Array.isArray(item.attendees) ? item.attendees.filter(isAttendeePresent).length : 0);
+    const attendedNames = Array.isArray(item.attendees)
+      ? item.attendees
+        .filter(isAttendeePresent)
+        .map(getAttendeeName)
+        .filter(Boolean)
+        .join(', ')
+      : '';
     const statusColors = getSoftStatusColor(status);
+    const timeLabel = formatCardTime(request.meetingTime);
 
     return (
       <TouchableOpacity
@@ -209,7 +244,7 @@ const MeetingsList = ({ authToken }) => {
           <View style={styles.detailRow}>
             <Ionicons name="calendar-outline" size={14} color="#64748B" style={styles.detailIcon} />
             <Text style={styles.detailText} numberOfLines={1}>
-              {request.meetingDate || 'Date pending'} {request.meetingTime ? `at ${request.meetingTime}` : ''}
+              {request.meetingDate || 'Date pending'} {timeLabel ? `at ${timeLabel}` : ''}
             </Text>
           </View>
           <View style={styles.detailRow}>
@@ -218,12 +253,20 @@ const MeetingsList = ({ authToken }) => {
               {[request.city, request.state].filter(Boolean).join(', ') || request.location || 'Location pending'}
             </Text>
           </View>
+          {meetingGroup === 'completed' && attendedNames ? (
+            <View style={styles.detailRow}>
+              <Ionicons name="checkmark-circle-outline" size={14} color="#059669" style={styles.detailIcon} />
+              <Text style={styles.detailText} numberOfLines={1}>{attendedNames}</Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.cardFooter}>
           <View style={[styles.footerPill, { backgroundColor: '#EEF2FF' }]}>
             <Ionicons name="people-outline" size={13} color="#4F46E5" />
-            <Text style={[styles.footerPillText, { color: '#4F46E5' }]}>{attendeeCount} expected</Text>
+            <Text style={[styles.footerPillText, { color: '#4F46E5' }]}>
+              {meetingGroup === 'completed' ? `${attendedCount} attended` : `${attendeeCount} expected`}
+            </Text>
           </View>
           <View style={[styles.footerPill, { backgroundColor: '#ECFDF5' }]}>
             <Ionicons name="wallet-outline" size={13} color="#059669" />
@@ -237,12 +280,17 @@ const MeetingsList = ({ authToken }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Meetings</Text>
-          <Text style={styles.headerSubtitle}>Create requests and finish meeting actions</Text>
-        </View>
-        <TouchableOpacity style={styles.headerButton} onPress={() => navigation.navigate('NewMeeting', { authToken })}>
-          <Ionicons name="add" size={22} color="#FFFFFF" />
+        <Text style={styles.headerTitle}>Meetings</Text>
+        <TouchableOpacity
+          style={styles.monthFilterButton}
+          onPress={() => {
+            setOpenFilterDropdown(null);
+            setIsFilterOpen(true);
+          }}
+        >
+          <Ionicons name="filter-outline" size={16} color="#4F46E5" />
+          <Text style={styles.monthFilterText}>{moment({ month: selectedMonth }).format('MMM')} {selectedYear}</Text>
+          <Ionicons name="chevron-down" size={14} color="#64748B" />
         </TouchableOpacity>
       </View>
 
@@ -299,6 +347,91 @@ const MeetingsList = ({ authToken }) => {
           )}
         />
       )}
+
+      <TouchableOpacity
+        style={styles.fabButton}
+        onPress={() => navigation.navigate('NewMeeting', { authToken })}
+        activeOpacity={0.88}
+      >
+        <Ionicons name="add" size={28} color="#FFFFFF" />
+      </TouchableOpacity>
+
+      <Modal visible={isFilterOpen} transparent animationType="fade" onRequestClose={() => setIsFilterOpen(false)}>
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsFilterOpen(false)}>
+          <TouchableOpacity style={styles.filterSheet} activeOpacity={1} onPress={() => {}}>
+            <View style={styles.filterSheetHeader}>
+              <Text style={styles.filterSheetTitle}>Filter Month</Text>
+              <TouchableOpacity style={styles.filterCloseButton} onPress={() => setIsFilterOpen(false)}>
+                <Ionicons name="close" size={20} color="#475569" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.filterField}>
+              <Text style={styles.filterLabel}>Month</Text>
+              <TouchableOpacity
+                style={[styles.filterDropdown, openFilterDropdown === 'month' && styles.filterDropdownActive]}
+                onPress={() => setOpenFilterDropdown((current) => (current === 'month' ? null : 'month'))}
+              >
+                <Text style={styles.filterDropdownValue}>{monthOptions.find((month) => month.value === selectedMonth)?.label}</Text>
+                <Ionicons name={openFilterDropdown === 'month' ? 'chevron-up' : 'chevron-down'} size={18} color="#64748B" />
+              </TouchableOpacity>
+              {openFilterDropdown === 'month' ? (
+                <ScrollView style={styles.dropdownMenu} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {monthOptions.map((month) => {
+                    const isSelected = selectedMonth === month.value;
+                    return (
+                      <TouchableOpacity
+                        key={month.value}
+                        style={[styles.dropdownOption, isSelected && styles.dropdownOptionActive]}
+                        onPress={() => {
+                          setSelectedMonth(month.value);
+                          setOpenFilterDropdown(null);
+                        }}
+                      >
+                        <Text style={[styles.dropdownOptionText, isSelected && styles.dropdownOptionTextActive]}>{month.label}</Text>
+                        {isSelected ? <Ionicons name="checkmark-circle" size={18} color="#4F46E5" /> : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              ) : null}
+            </View>
+
+            <View style={styles.filterField}>
+              <Text style={styles.filterLabel}>Year</Text>
+              <TouchableOpacity
+                style={[styles.filterDropdown, openFilterDropdown === 'year' && styles.filterDropdownActive]}
+                onPress={() => setOpenFilterDropdown((current) => (current === 'year' ? null : 'year'))}
+              >
+                <Text style={styles.filterDropdownValue}>{selectedYear}</Text>
+                <Ionicons name={openFilterDropdown === 'year' ? 'chevron-up' : 'chevron-down'} size={18} color="#64748B" />
+              </TouchableOpacity>
+              {openFilterDropdown === 'year' ? (
+                <ScrollView style={styles.dropdownMenu} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {yearOptions.map((year) => {
+                    const isSelected = selectedYear === year;
+                    return (
+                      <TouchableOpacity
+                        key={year}
+                        style={[styles.dropdownOption, isSelected && styles.dropdownOptionActive]}
+                        onPress={() => {
+                          setSelectedYear(year);
+                          setOpenFilterDropdown(null);
+                        }}
+                      >
+                        <Text style={[styles.dropdownOptionText, isSelected && styles.dropdownOptionTextActive]}>{year}</Text>
+                        {isSelected ? <Ionicons name="checkmark-circle" size={18} color="#4F46E5" /> : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              ) : null}
+            </View>
+            <TouchableOpacity style={styles.applyFilterButton} onPress={() => setIsFilterOpen(false)}>
+              <Text style={styles.applyFilterText}>Apply Filter</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -323,18 +456,22 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#111827',
   },
-  headerSubtitle: {
-    marginTop: 3,
-    color: '#64748B',
-    fontSize: 13,
-  },
-  headerButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  monthFilterButton: {
+    minHeight: 38,
+    borderRadius: 19,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  monthFilterText: {
+    marginHorizontal: 6,
+    color: '#4F46E5',
+    fontSize: 13,
+    fontWeight: '900',
   },
   scopeTabs: {
     flexDirection: 'row',
@@ -524,6 +661,125 @@ const styles = StyleSheet.create({
     color: '#64748B',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  fabButton: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4F46E5',
+    shadowColor: '#312E81',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.34)',
+    justifyContent: 'flex-end',
+  },
+  filterSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 18,
+    paddingBottom: 24,
+  },
+  filterSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  filterSheetTitle: {
+    color: '#0F172A',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  filterCloseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+  },
+  filterLabel: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    marginTop: 8,
+  },
+  filterField: {
+    marginBottom: 10,
+  },
+  filterDropdown: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D7DCEA',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterDropdownActive: {
+    borderColor: '#4F46E5',
+    backgroundColor: '#EEF2FF',
+  },
+  filterDropdownValue: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  dropdownMenu: {
+    maxHeight: 190,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    marginTop: 8,
+  },
+  dropdownOption: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  dropdownOptionActive: {
+    backgroundColor: '#EEF2FF',
+  },
+  dropdownOptionText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  dropdownOptionTextActive: {
+    color: '#4F46E5',
+  },
+  applyFilterButton: {
+    minHeight: 48,
+    borderRadius: 12,
+    backgroundColor: '#4F46E5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  applyFilterText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
   },
 });
 
