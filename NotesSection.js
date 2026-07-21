@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { format } from 'date-fns';
 import axios from 'axios';
 
@@ -108,8 +108,12 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
     }
   };
 
+  const getNoteKey = (note, index) => (
+    note?.id ? String(note.id) : `note-${index}`
+  );
+
   const renderNoteItem = ({ item: note, index }) => (
-    <View style={styles.noteItem}>
+    <View key={getNoteKey(note, index)} style={styles.noteItem}>
       <View style={styles.avatarContainer}>
         <Text style={styles.avatarText}>
           {note.employeeName
@@ -142,11 +146,13 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={notes}
-        renderItem={renderNoteItem}
-        keyExtractor={(item) => item.id.toString()}
-      />
+      <View style={styles.notesList}>
+        {notes.length > 0 ? (
+          notes.map((note, index) => renderNoteItem({ item: note, index }))
+        ) : (
+          <Text style={styles.emptyText}>No notes added yet</Text>
+        )}
+      </View>
       {!isInputVisible && (
         <TouchableOpacity style={styles.addButton} onPress={handleAddNote}>
           <Text style={styles.addButtonText}>Add Note</Text>
@@ -177,9 +183,17 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     padding: 16,
     backgroundColor: '#FFFFFF',
+  },
+  notesList: {
+    marginBottom: 8,
+  },
+  emptyText: {
+    color: '#6B7280',
+    fontSize: 14,
+    textAlign: 'center',
+    marginVertical: 16,
   },
   noteItem: {
     flexDirection: 'row',

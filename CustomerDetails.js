@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import NotesSection from './NotesSection';
@@ -10,6 +10,10 @@ import DatePicker from './DatePicker';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { format } from 'date-fns';
+import {
+  getMobileActionLocation,
+  getMobileLocationErrorContent,
+} from './MobileLocationService';
 
 const clientTypeOptions = [
   { label: 'Shop', value: 'shop' },
@@ -405,7 +409,7 @@ function CustomerDetails({ route, navigation }) {
               <TouchableOpacity style={styles.createVisitButton} onPress={() => setVisitModalVisible(true)}>
                 <Text style={styles.createVisitButtonText}>Create Visit</Text>
               </TouchableOpacity>
-              <VisitsTimeline storeId={customerId} authToken={authToken} navigation={navigation} />
+              <VisitsTimeline storeId={customerId} authToken={authToken} navigation={navigation} embedded />
             </View>
           )}
           {contentTab === 'sites' && showSitesTab && (
@@ -430,6 +434,7 @@ function CustomerDetails({ route, navigation }) {
     const [customClientType, setCustomClientType] = useState(customerDetails.clientType === 'others' ? customerDetails.customClientType : '');
     const [selectedState, setSelectedState] = useState(customerDetails.state);
     const [isDobPickerVisible, setIsDobPickerVisible] = useState(false);
+    const [isFetchingLocation, setIsFetchingLocation] = useState(false);
 
     useEffect(() => {
       setUpdatedDetails(customerDetails);
@@ -489,24 +494,45 @@ function CustomerDetails({ route, navigation }) {
     };
 
     const getLocation = async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        console.log('Permission to access location was denied');
-        return;
+      if (isFetchingLocation) return;
+
+      try {
+        setIsFetchingLocation(true);
+        const location = await getMobileActionLocation({
+          requirePrecise: false,
+          timeoutMs: 15000,
+          cacheMaxAgeMs: 120000,
+          cacheRequiredAccuracy: 200,
+          balancedRequiredAccuracy: 200,
+        });
+
+        setUpdatedDetails((prevDetails) => ({
+          ...prevDetails,
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        }));
+        setSelectedLocation({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        });
+
+        Alert.alert(
+          'Location fetched',
+          `Latitude: ${location.coords.latitude}, Longitude: ${location.coords.longitude}`
+        );
+      } catch (error) {
+        console.error('Error fetching customer location:', error.message);
+        const content = getMobileLocationErrorContent(error, 'choose current customer location');
+        const buttons = content.canOpenSettings
+          ? [
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+            { text: 'OK', style: 'cancel' },
+          ]
+          : [{ text: 'OK' }];
+        Alert.alert(content.title, content.message, buttons);
+      } finally {
+        setIsFetchingLocation(false);
       }
-
-      let location = await Location.getCurrentPositionAsync({});
-      setUpdatedDetails((prevDetails) => ({
-        ...prevDetails,
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      }));
-      setSelectedLocation({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      });
-
-      alert(`Location fetched: Latitude: ${location.coords.latitude}, Longitude: ${location.coords.longitude}`);
     };
 
     const getSitesLabel = () => {
@@ -696,8 +722,17 @@ function CustomerDetails({ route, navigation }) {
                     onChangeText={(value) => handleInputChange('pincode', value)}
                     keyboardType="numeric"
                   />
-                  <TouchableOpacity style={[styles.footerButton, styles.saveButton]} onPress={getLocation}>
-                    <Text style={styles.locationButtonText}>Choose Current Location</Text>
+                  <TouchableOpacity
+                    style={[styles.footerButton, styles.saveButton, isFetchingLocation && styles.disabledButton]}
+                    onPress={getLocation}
+                    disabled={isFetchingLocation}
+                  >
+                    {isFetchingLocation ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : null}
+                    <Text style={styles.locationButtonText}>
+                      {isFetchingLocation ? 'Fetching Location...' : 'Choose Current Location'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -815,6 +850,12 @@ function CustomerDetails({ route, navigation }) {
 
   return (
     <View style={styles.container}>
+      <ScrollView
+        style={styles.pageScroll}
+        contentContainerStyle={styles.pageScrollContent}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
       {isBirthday && (
         <View style={styles.birthdayCard}>
           <View style={styles.birthdayCardContent}>
@@ -830,6 +871,7 @@ function CustomerDetails({ route, navigation }) {
       )}
       {renderCustomerCard()}
       {renderContent()}
+      </ScrollView>
       <EditCustomerModal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
@@ -938,6 +980,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F3F4F6',
+  },
+  pageScroll: {
+    flex: 1,
+  },
+  pageScrollContent: {
+    paddingBottom: 32,
+    flexGrow: 1,
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -1064,10 +1113,10 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   contentContainer: {
-    flex: 1,
     backgroundColor: '#F3F4F6',
     paddingHorizontal: 16,
     paddingTop: 16,
+    paddingBottom: 16,
   },
   tabContainer: {
     flexDirection: 'row',
@@ -1106,7 +1155,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
-    flex: 1,
+    minHeight: 220,
   },
   createVisitButton: {
     backgroundColor: '#4F46E5',
@@ -1170,6 +1219,9 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     backgroundColor: '#4F46E5',
+  },
+  disabledButton: {
+    opacity: 0.65,
   },
   cancelButton: {
     backgroundColor: '#F3F4F6',
@@ -1347,6 +1399,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
+    marginLeft: 8,
   },
   birthdayCard: {
     backgroundColor: '#FDF2F8',

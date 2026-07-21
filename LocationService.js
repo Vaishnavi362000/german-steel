@@ -1,6 +1,6 @@
-import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { getVisitActionLocation } from './MobileLocationService';
 
 class LocationService {
   static async isWithinWorkingHours() {
@@ -23,7 +23,7 @@ class LocationService {
       const token = await AsyncStorage.getItem('userToken');
 
       if (!employeeId || !token) {
-        console.error('Missing employeeId or token');
+        console.warn('Skipping live location update: missing employeeId or token');
         return;
       }
 
@@ -38,54 +38,32 @@ class LocationService {
       console.log('Location update response:', response.data);
       return response.data === 'Location Updated!';
     } catch (error) {
-      console.error('Error updating location:', error);
+      const status = error?.response?.status;
+      const detail = error?.response?.data || error?.message;
+      console.warn('Live location update skipped:', { status, detail });
       return false;
     }
   }
 
+  static async updateCurrentLocation() {
+    const location = await this.getCurrentLocation();
+    if (!location) return null;
+
+    await this.updateLocation(location);
+    return location;
+  }
+
   static async getCurrentLocation() {
     try {
-      const { status: foregroundStatus } = 
-        await Location.requestForegroundPermissionsAsync();
-
-      if (foregroundStatus !== 'granted') {
-        console.error('Location permissions not granted');
-        return null;
-      }
-
-      // Try to get location with multiple fallback options
-      const locationPromises = [
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-          timeout: 15000
-        }).catch(() => null),
-
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-          timeout: 10000
-        }).catch(() => null),
-
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Low,
-          timeout: 5000
-        }).catch(() => null),
-
-        Location.getLastKnownPositionAsync({
-          maxAge: 300000,
-          requiredAccuracy: 100
-        }).catch(() => null)
-      ];
-
-      const results = await Promise.all(locationPromises);
-      const location = results.find(result => result !== null);
-
-      if (!location) {
-        throw new Error('Could not get location');
-      }
-
-      return location;
+      return await getVisitActionLocation({
+        requirePrecise: false,
+        timeoutMs: 12000,
+        cacheMaxAgeMs: 300000,
+        cacheRequiredAccuracy: 200,
+        balancedRequiredAccuracy: 250,
+      });
     } catch (error) {
-      console.error('Error getting current location:', error);
+      console.warn('Live location fetch skipped:', error?.message || error);
       return null;
     }
   }

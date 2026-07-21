@@ -1,15 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, Modal, ActivityIndicator, Platform, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, Modal, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
 import moment from 'moment';
 import { useNavigation } from '@react-navigation/native';
 import { debounce } from 'lodash';
-import * as TaskManager from 'expo-task-manager';
 
 // Import refactored components
 import BottomSheet from './BottomSheet';
@@ -23,11 +21,26 @@ import Sites from './Sites';
 import IntentLevel from './IntentLevel';
 import { format, addDays, subDays, startOfWeek, endOfWeek, isSameDay } from 'date-fns';
 import ContactsManager from './ContactsManager';
+import { getVisitActionLocation } from './MobileLocationService';
 
-// Add this constant before the component
-const LOCATION_TASK_NAME = 'BACKGROUND_LOCATION_TASK';
+const VISIT_LOCATION_OPTIONS = {
+  requirePrecise: true,
+  timeoutMs: 15000,
+  highAccuracyTimeoutMs: 10000,
+  cacheMaxAgeMs: 120000,
+  cacheRequiredAccuracy: 120,
+  balancedRequiredAccuracy: 120,
+  highRequiredAccuracy: 80,
+};
 
-// Remove the task definition since we don't need background tracking anymore
+const LOCATION_STEP_LABELS = {
+  permission: 'Checking location permission...',
+  services: 'Checking device location...',
+  balanced: 'Getting your location...',
+  high: 'Improving accuracy...',
+  cached: 'Trying recent location...',
+};
+
 const VisitScreen = ({ route }) => {
   const [bottomSheetVisible, setBottomSheetVisible] = useState(false);
   const [bottomSheetTitle, setBottomSheetTitle] = useState('');
@@ -68,7 +81,6 @@ const VisitScreen = ({ route }) => {
   const [notesCount, setNotesCount] = useState(0);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
-  const [isLocationTaskRunning, setIsLocationTaskRunning] = useState(false);
   const [checkInStep, setCheckInStep] = useState(null);
   const [checkOutStep, setCheckOutStep] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -492,23 +504,126 @@ const VisitScreen = ({ route }) => {
     }
   };
 
-  const requestLocationPermission = async () => {
-    try {
-      const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
-      if (foregroundStatus !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required for check-in.');
-        return false;
-      }
-      return true;
-    } catch (error) {
-      console.error('Error requesting location permissions:', error);
-      return false;
+  const getLocationErrorContent = (error, actionLabel) => {
+    const code = error?.code;
+
+    switch (code) {
+      case 'permission_denied':
+        return {
+          title: 'Location Permission Needed',
+          message: `${actionLabel} needs location permission. Allow location access for this app, then try again.`,
+          canOpenSettings: error?.canOpenSettings,
+        };
+      case 'precise_required':
+        return {
+          title: 'Precise Location Needed',
+          message: `Android has granted approximate location only. Please change this app's location permission to Precise so ${actionLabel.toLowerCase()} can capture accurate coordinates.`,
+          canOpenSettings: true,
+        };
+      case 'services_disabled':
+        return {
+          title: 'Location Services Disabled',
+          message: 'Turn on device location services, then try again.',
+          canOpenSettings: true,
+        };
+      case 'provider_unavailable':
+        return {
+          title: 'Location Provider Unavailable',
+          message: 'Android location providers are not ready. Turn on GPS/network location or move to an area with better signal.',
+          canOpenSettings: true,
+        };
+      case 'location_timeout':
+        return {
+          title: 'Location Timeout',
+          message: 'We could not get a fresh location in time, and no recent accurate saved location was available. Try again near a window or outdoors.',
+        };
+      case 'location_accuracy_low':
+        return {
+          title: 'Location Accuracy Too Low',
+          message: 'The current and saved locations are not accurate enough. Enable precise location and try again from a better signal area.',
+          canOpenSettings: true,
+        };
+      case 'location_in_progress':
+        return {
+          title: 'Location Already Running',
+          message: 'Another location request is still running. Please wait a moment and try again.',
+        };
+      default:
+        return {
+          title: `${actionLabel} Location Error`,
+          message: 'Unable to get your location. Please try again from an area with better GPS or network signal.',
+        };
     }
   };
+
+  const resetCheckInState = () => {
+    setIsCheckingIn(false);
+    setCheckInStep(null);
+  };
+
+  const resetCheckOutState = () => {
+    setIsCheckingOut(false);
+    setCheckOutStep(null);
+  };
+
+  const isVisitLocationError = (error) => {
+    const code = error?.code;
+    return Boolean(
+      error?.isLocationError ||
+      code?.startsWith?.('location_') ||
+      code === 'permission_denied' ||
+      code === 'precise_required' ||
+      code === 'services_disabled' ||
+      code === 'provider_unavailable'
+    );
+  };
+
+  const showVisitLocationError = (error, actionLabel, retryAction, resetAction) => {
+    const content = getLocationErrorContent(error, actionLabel);
+    const buttons = [];
+
+    if (content.canOpenSettings) {
+      buttons.push({
+        text: 'Open Settings',
+        onPress: () => {
+          resetAction();
+          Linking.openSettings();
+        },
+      });
+    }
+
+    buttons.push(
+      {
+        text: 'Retry',
+        onPress: () => {
+          resetAction();
+          setTimeout(retryAction, 250);
+        },
+      },
+      {
+        text: 'Cancel',
+        style: 'cancel',
+        onPress: resetAction,
+      }
+    );
+
+    Alert.alert(content.title, content.message, buttons);
+  };
+
+  const fetchVisitActionLocation = async (setStep) => getVisitActionLocation({
+    ...VISIT_LOCATION_OPTIONS,
+    onStatus: (status) => {
+      setStep(LOCATION_STEP_LABELS[status] || 'Getting your location...');
+    },
+  });
 
   const handleCheckIn = async () => {
     if (!isCheckInImageUploaded) {
       Alert.alert('Error', 'Please add check-in images before checking in.');
+      return;
+    }
+
+    if (isCheckingIn || isCheckingOut) {
       return;
     }
 
@@ -524,38 +639,11 @@ const VisitScreen = ({ route }) => {
         return;
       }
 
-      // Step 2: Check permissions and location services
-      setCheckInStep('Checking location permissions...');
-      const hasLocationPermission = await requestLocationPermission();
-      if (!hasLocationPermission) {
-        setIsCheckingIn(false);
-        setCheckInStep(null);
-        return;
-      }
+      // Step 2: Get one guarded location request with timeout/cached fallback.
+      const location = await fetchVisitActionLocation(setCheckInStep);
 
-      // Check if location services are enabled
-      const locationServicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!locationServicesEnabled) {
-        Alert.alert(
-          'Location Services Disabled',
-          'Please enable location services to check in.',
-          [
-            { text: 'Open Settings', onPress: () => Linking.openSettings() },
-            { text: 'Cancel', style: 'cancel' }
-          ]
-        );
-        setIsCheckingIn(false);
-        setCheckInStep(null);
-        return;
-      }
-
-      // Step 3: Get Location with new optimized method
-      setCheckInStep('Getting your location...');
-      console.log('Getting location with optimized method...');
-      const location = await getLocationWithFallback();
-
-      // Step 4: Send check-in request
-      setCheckInStep('Checking in...');
+      // Step 3: Send check-in request
+      setCheckInStep('Submitting check-in...');
       const { latitude, longitude } = location.coords;
       console.log('Check-in location:', latitude, longitude);
 
@@ -590,6 +678,11 @@ const VisitScreen = ({ route }) => {
       }
     } catch (error) {
       console.error('Error during check-in:', error);
+      if (isVisitLocationError(error)) {
+        showVisitLocationError(error, 'Check-in', handleCheckIn, resetCheckInState);
+        return;
+      }
+
       let errorMessage = 'Failed to check in. Please try again.';
       let shouldNavigateToLogin = false;
       
@@ -650,27 +743,17 @@ const VisitScreen = ({ route }) => {
       return;
     }
 
+    if (isCheckingOut || isCheckingIn) {
+      return;
+    }
+
     setIsCheckingOut(true);
     try {
-      // Step 1: Check permissions
-      setCheckOutStep('Checking location permissions...');
-      const hasLocationPermission = await requestLocationPermission();
-      if (!hasLocationPermission) {
-        setIsCheckingOut(false);
-        return;
-      }
+      // Step 1: Get one guarded location request with timeout/cached fallback.
+      const location = await fetchVisitActionLocation(setCheckOutStep);
 
-      // Step 2: Get Location
-      setCheckOutStep('Getting your location...');
-      console.log('Getting location for checkout...');
-      const location = await getLocationWithFallback();
-
-      if (!location) {
-        throw new Error('Could not get location');
-      }
-
-      // Step 3: Send checkout request
-      setCheckOutStep('Checking out...');
+      // Step 2: Send checkout request
+      setCheckOutStep('Submitting checkout...');
       const { latitude, longitude } = location.coords;
       console.log('Check-out location:', latitude, longitude);
 
@@ -712,6 +795,11 @@ const VisitScreen = ({ route }) => {
       }
     } catch (error) {
       console.error('Error during check-out:', error);
+      if (isVisitLocationError(error)) {
+        showVisitLocationError(error, 'Checkout', handleCheckOut, resetCheckOutState);
+        return;
+      }
+
       Alert.alert(
         'Checkout Error',
         error.response?.data || error.message || 'Failed to check out. Please try again.'
@@ -1221,15 +1309,6 @@ const VisitScreen = ({ route }) => {
     return `Please ${requirementsText} before checking out.`;
   };
 
-  useEffect(() => {
-    return () => {
-      // Cleanup location tracking when component unmounts
-      stopLocationTracking().catch(error => {
-        console.error('Error in location cleanup:', error);
-      });
-    };
-  }, []);
-
   const openModal = (title, Component, props) => {
     if (!visit?.storeId) {
       console.log('Store ID not available yet');
@@ -1400,40 +1479,6 @@ const VisitScreen = ({ route }) => {
     }
   };
 
-  const stopLocationTracking = async () => {
-    try {
-      // Remove any location subscriptions or tracking
-      await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME).catch(() => {});
-      setIsLocationTaskRunning(false);
-    } catch (error) {
-      console.error('Error stopping location tracking:', error);
-    }
-  };
-
-  const getLocationWithFallback = async () => {
-    try {
-      // First try with high accuracy
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-        timeout: 15000
-      });
-      return location;
-    } catch (error) {
-      console.log('Error getting high accuracy location, trying with lower accuracy:', error);
-      try {
-        // Fallback to lower accuracy if high accuracy fails
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-          timeout: 10000
-        });
-        return location;
-      } catch (error) {
-        console.error('Error getting location:', error);
-        throw new Error('location_error');
-      }
-    }
-  };
-
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <Header />
@@ -1464,10 +1509,9 @@ const VisitScreen = ({ route }) => {
         isVisible={bottomSheetVisible}
         onClose={closeBottomSheet}
         title={bottomSheetTitle}
+        scrollable={false}
       >
-        <ScrollView style={styles.bottomSheetScrollView}>
-          {bottomSheetContent}
-        </ScrollView>
+        {bottomSheetContent}
       </BottomSheet>
       <Modal
         visible={modalVisible}

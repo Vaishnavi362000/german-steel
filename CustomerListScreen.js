@@ -4,8 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
 import CreateCustomerComponent from './CreateCustomerComponent';
+import LocationService from './LocationService';
 
 const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh, route }) => {
   const [isCreateCustomerModalOpen, setIsCreateCustomerModalOpen] = useState(false);
@@ -28,40 +28,14 @@ const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh, route 
 
   const updateLocation = useCallback(async () => {
     try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        console.log('Location permission denied');
-        return;
-      }
-
-      let location = await Location.getCurrentPositionAsync({});
-      setLocation(location);
-
-      const employeeId = await AsyncStorage.getItem('employeeId');
-      if (!employeeId) {
-        console.error('Employee ID not found');
-        return;
-      }
-
-      const response = await axios.put(
-        `https://api.gajkesaristeels.in/employee/updateLiveLocation?id=${employeeId}&latitude=${location.coords.latitude}&longitude=${location.coords.longitude}`,
-        {},
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        }
-      );
-
-      if (response.data === 'Location Updated!') {
-        console.log('Location updated successfully on server');
-      } else {
-        console.log('Unexpected response when updating location:', response.data);
+      const currentLocation = await LocationService.updateCurrentLocation();
+      if (currentLocation) {
+        setLocation(currentLocation);
       }
     } catch (error) {
-      console.error('Error updating location:', error);
+      console.warn('Live location refresh skipped:', error?.message || error);
     }
-  }, [authToken]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {

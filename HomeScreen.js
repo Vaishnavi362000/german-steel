@@ -5,10 +5,10 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
-import * as Location from 'expo-location';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Modal from 'react-native-modal';
 import { getPendingCustomers } from './utils/offlineStorage';
+import LocationService from './LocationService';
 
 import RecentVisits from './components/RecentVisits';
 import { Greeting } from './components/HomeComponents';
@@ -33,40 +33,14 @@ const HomeScreen = ({ authToken }) => {
 
   const updateLocation = useCallback(async () => {
     try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        console.log('Location permission denied');
-        return;
-      }
-
-      let location = await Location.getCurrentPositionAsync({});
-      setLocation(location);
-
-      const employeeId = await AsyncStorage.getItem('employeeId');
-      if (!employeeId) {
-        console.error('Employee ID not found');
-        return;
-      }
-
-      const response = await axios.put(
-        `https://api.gajkesaristeels.in/employee/updateLiveLocation?id=${employeeId}&latitude=${location.coords.latitude}&longitude=${location.coords.longitude}`,
-        {},
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        }
-      );
-
-      if (response.data === 'Location Updated!') {
-        console.log('Location updated successfully on server');
-      } else {
-        console.log('Unexpected response when updating location:', response.data);
+      const currentLocation = await LocationService.updateCurrentLocation();
+      if (currentLocation) {
+        setLocation(currentLocation);
       }
     } catch (error) {
-      console.error('Error updating location:', error);
+      console.warn('Live location refresh skipped:', error?.message || error);
     }
-  }, [authToken]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {

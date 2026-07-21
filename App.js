@@ -6,7 +6,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Alert } from 'react-native';
 import * as Updates from 'expo-updates';
-import * as Location from 'expo-location';
 
 // Import your screens
 import LoginScreen from './LoginScreen';
@@ -34,7 +33,6 @@ import HomeLocationScreen from './HomeLocationScreen';
 import StoreSelectionScreen from './StoreSelectionScreen';
 import AddComplaintScreen from './AddComplaintScreen';
 import AddRequirementScreen from './AddRequirementScreen';
-import LocationService from './LocationService';
 import YesterdayStatsScreen from './YesterdayStatsScreen';
 
 const Tab = createBottomTabNavigator();
@@ -218,17 +216,6 @@ const App = () => {
 
     await AsyncStorage.setItem('userToken', token);
     await AsyncStorage.setItem('employeeId', empId);
-
-    try {
-      // Get initial location
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        let location = await Location.getCurrentPositionAsync({});
-        await LocationService.updateLocation(location);
-      }
-    } catch (error) {
-      console.error('Error initializing location services:', error);
-    }
   };
 
   const handleLogout = async () => {
@@ -241,20 +228,6 @@ const App = () => {
       console.error('Error logging out:', error);
     }
   };
-
-  useEffect(() => {
-    const initializeApp = async () => {
-      if (authToken) {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          let location = await Location.getCurrentPositionAsync({});
-          await LocationService.updateLocation(location);
-        }
-      }
-    };
-
-    initializeApp();
-  }, [authToken]);
 
   if (isInitializing) {
     return null;

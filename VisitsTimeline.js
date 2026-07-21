@@ -6,7 +6,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 
 const VISITS_PER_PAGE = 2;
 
-export default function VisitsTimeline({ storeId, authToken, navigation, currentVisitId }) {
+export default function VisitsTimeline({ storeId, authToken, navigation, currentVisitId, embedded = false }) {
   const [visits, setVisits] = useState([]);
   const [displayedVisits, setDisplayedVisits] = useState([]);
   const [page, setPage] = useState(1);
@@ -17,10 +17,9 @@ export default function VisitsTimeline({ storeId, authToken, navigation, current
   }, [storeId]);
 
   useEffect(() => {
-    const startIndex = (page - 1) * VISITS_PER_PAGE;
-    const endIndex = startIndex + VISITS_PER_PAGE;
-    const visitsToDisplay = visits.slice(startIndex, endIndex);
-    setDisplayedVisits((prevVisits) => [...prevVisits, ...visitsToDisplay]);
+    const endIndex = page * VISITS_PER_PAGE;
+    const visitsToDisplay = visits.slice(0, endIndex);
+    setDisplayedVisits(visitsToDisplay);
     setHasMore(endIndex < visits.length);
   }, [visits, page]);
 
@@ -39,6 +38,7 @@ export default function VisitsTimeline({ storeId, authToken, navigation, current
       const sortedVisits = filteredVisits.sort(
         (a, b) => new Date(b.visit_date) - new Date(a.visit_date)
       );
+      setPage(1);
       setVisits(sortedVisits);
     } catch (error) {
       console.error('Error fetching visits:', error);
@@ -64,9 +64,13 @@ export default function VisitsTimeline({ storeId, authToken, navigation, current
     return visitStatus;
   };
 
+  const getVisitKey = (visit, index) => (
+    visit?.id ? String(visit.id) : `visit-${index}`
+  );
 
   const renderVisitItem = ({ item: visit, index }) => (
     <TouchableOpacity
+      key={getVisitKey(visit, index)}
       style={styles.timelineItem}
       onPress={() => {
         navigation.navigate('VisitScreen', { visitId: visit.id, authToken });
@@ -105,22 +109,32 @@ export default function VisitsTimeline({ storeId, authToken, navigation, current
   );
 
   return (
-    <View style={styles.container}>
-      
-      <FlatList
-        data={displayedVisits}
-        renderItem={renderVisitItem}
-        keyExtractor={(item) => item.id.toString()}
-        onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.5}
-        ListFooterComponent={
-          hasMore ? (
+    <View style={[styles.container, embedded && styles.embeddedContainer]}>
+      {embedded ? (
+        <>
+          {displayedVisits.map((visit, index) => renderVisitItem({ item: visit, index }))}
+          {hasMore && (
             <TouchableOpacity style={styles.loadMoreButton} onPress={handleLoadMore}>
               <Text style={styles.loadMoreButtonText}>Load More</Text>
             </TouchableOpacity>
-          ) : null
-        }
-      />
+          )}
+        </>
+      ) : (
+        <FlatList
+          data={displayedVisits}
+          renderItem={renderVisitItem}
+          keyExtractor={getVisitKey}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            hasMore ? (
+              <TouchableOpacity style={styles.loadMoreButton} onPress={handleLoadMore}>
+                <Text style={styles.loadMoreButtonText}>Load More</Text>
+              </TouchableOpacity>
+            ) : null
+          }
+        />
+      )}
     </View>
   );
 }
@@ -157,6 +171,10 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     backgroundColor: '#FFFFFF',
+  },
+  embeddedContainer: {
+    flex: 0,
+    padding: 0,
   },
   timelineItem: {
     flexDirection: 'row',

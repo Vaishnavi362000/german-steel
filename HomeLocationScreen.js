@@ -1,14 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, SafeAreaView } from 'react-native';
-import * as Location from 'expo-location';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, SafeAreaView, Linking } from 'react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  getMobileActionLocation,
+  getMobileLocationErrorContent,
+} from './MobileLocationService';
 
 const HomeLocationScreen = ({ route, navigation }) => {
   const { authToken } = route.params;
   const [loading, setLoading] = useState(true);
   const [currentLocation, setCurrentLocation] = useState(null);
+  const [isUpdatingLocation, setIsUpdatingLocation] = useState(false);
 
   useEffect(() => {
     const fetchLocationData = async () => {
@@ -95,24 +99,17 @@ const HomeLocationScreen = ({ route, navigation }) => {
   };
 
   const getCurrentLocation = async () => {
-    try {
-      console.log('Getting current location...');
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      console.log('Location permission status:', status);
-      
-      if (status !== 'granted') {
-        Alert.alert('Permission denied', 'Permission to access location was denied');
-        return;
-      }
+    if (isUpdatingLocation) return;
 
-      console.log('Getting position...');
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-        timeInterval: 5000,
-        distanceInterval: 0,
-      }).catch(error => {
-        console.error('Error getting position:', error);
-        throw new Error('Failed to get current position');
+    try {
+      setIsUpdatingLocation(true);
+      console.log('Getting current location...');
+      const location = await getMobileActionLocation({
+        requirePrecise: false,
+        timeoutMs: 15000,
+        cacheMaxAgeMs: 120000,
+        cacheRequiredAccuracy: 200,
+        balancedRequiredAccuracy: 200,
       });
 
       if (!location || !location.coords) {
@@ -158,10 +155,23 @@ const HomeLocationScreen = ({ route, navigation }) => {
       }
     } catch (error) {
       console.error('Error in getCurrentLocation:', error);
-      Alert.alert(
-        'Error',
-        error.message || 'Failed to set home location. Please try again.'
-      );
+      if (error?.isLocationError || error?.code?.startsWith?.('location_') || error?.code === 'permission_denied') {
+        const content = getMobileLocationErrorContent(error, 'set home location');
+        const buttons = content.canOpenSettings
+          ? [
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+            { text: 'OK', style: 'cancel' },
+          ]
+          : [{ text: 'OK' }];
+        Alert.alert(content.title, content.message, buttons);
+      } else {
+        Alert.alert(
+          'Error',
+          error.message || 'Failed to set home location. Please try again.'
+        );
+      }
+    } finally {
+      setIsUpdatingLocation(false);
     }
   };
 
@@ -201,16 +211,22 @@ const HomeLocationScreen = ({ route, navigation }) => {
             </View>
 
             <View style={styles.buttonGroup}>
-              <TouchableOpacity 
-                style={[styles.button, styles.primaryButton]} 
+              <TouchableOpacity
+                style={[styles.button, styles.primaryButton, isUpdatingLocation && styles.disabledButton]}
                 onPress={getCurrentLocation}
+                disabled={isUpdatingLocation}
               >
-                <Ionicons name="location-outline" size={24} color="#FFFFFF" />
-                <Text style={styles.buttonText}>Update Location</Text>
+                {isUpdatingLocation ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="location-outline" size={24} color="#FFFFFF" />
+                )}
+                <Text style={styles.buttonText}>{isUpdatingLocation ? 'Updating...' : 'Update Location'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.button, styles.dangerButton]} 
+              <TouchableOpacity
+                style={[styles.button, styles.dangerButton, isUpdatingLocation && styles.disabledButton]}
                 onPress={handleRemoveLocation}
+                disabled={isUpdatingLocation}
               >
                 <Ionicons name="trash-outline" size={24} color="#FFFFFF" />
                 <Text style={styles.buttonText}>Remove</Text>
@@ -225,12 +241,17 @@ const HomeLocationScreen = ({ route, navigation }) => {
             <Text style={styles.emptyStateTitle}>No Home Location Set</Text>
             <Text style={styles.emptyStateSubtitle}>Set your current location as home</Text>
             
-            <TouchableOpacity 
-              style={[styles.button, styles.primaryButton, styles.fullWidthButton]} 
+            <TouchableOpacity
+              style={[styles.button, styles.primaryButton, styles.fullWidthButton, isUpdatingLocation && styles.disabledButton]}
               onPress={getCurrentLocation}
+              disabled={isUpdatingLocation}
             >
-              <Ionicons name="location-outline" size={24} color="#FFFFFF" />
-              <Text style={styles.buttonText}>Use Current Location</Text>
+              {isUpdatingLocation ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Ionicons name="location-outline" size={24} color="#FFFFFF" />
+              )}
+              <Text style={styles.buttonText}>{isUpdatingLocation ? 'Fetching...' : 'Use Current Location'}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -313,6 +334,9 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: '#6C63FF',
+  },
+  disabledButton: {
+    opacity: 0.65,
   },
   dangerButton: {
     backgroundColor: '#EF4444',

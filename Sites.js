@@ -347,9 +347,9 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
         </View>
     );
 
-    const renderSiteCard = (site) => {
+    const renderSiteCard = (site, index = 0) => {
         return (
-            <View style={styles.siteCard}>
+            <View key={site.id ? String(site.id) : `${site.siteName || 'site'}-${site.startDate || index}-${index}`} style={styles.siteCard}>
                 {/* Header with Title and Actions */}
                 <View style={styles.cardHeader}>
                     <Text style={styles.siteName}>{site.siteName}</Text>
@@ -436,7 +436,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
                                 {isProfessional ? 'No projects added yet.' : 'No sites added yet.'}
                             </Text>
                         ) : (
-                            sites.map((site) => renderSiteCard(site))
+                            sites.map((site, index) => renderSiteCard(site, index))
                         )}
                     </View>
                 </>

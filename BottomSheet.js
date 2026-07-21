@@ -3,7 +3,10 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-nati
 import Modal from 'react-native-modal';
 import { Ionicons } from '@expo/vector-icons';
 
-const BottomSheet = ({ isVisible, onClose, title, children }) => {
+const BottomSheet = ({ isVisible, onClose, title, children, scrollable = true }) => {
+  const ContentContainer = scrollable ? ScrollView : View;
+  const contentProps = scrollable ? { keyboardShouldPersistTaps: 'handled' } : {};
+
   return (
     <Modal
       isVisible={isVisible}
@@ -20,9 +23,9 @@ const BottomSheet = ({ isVisible, onClose, title, children }) => {
           <Ionicons name="close" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.bottomSheetTitle}>{title}</Text>
-        <ScrollView style={styles.contentContainer}>
+        <ContentContainer style={styles.contentContainer} {...contentProps}>
           {children}
-        </ScrollView>
+        </ContentContainer>
       </View>
     </Modal>
   );

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   SafeAreaView,
   ScrollView,
@@ -14,9 +15,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
 import MeetingAttendeePicker from './MeetingAttendeePicker';
 import MeetingDealerShopPicker from './MeetingDealerShopPicker';
+import {
+  getMeetingCurrentLocation,
+  getMeetingLocationErrorContent,
+} from './MeetingLocationService';
 import MeetingTimePicker, {
   formatMeetingTimeDisplay,
   isValidMeetingTime,
@@ -289,24 +293,6 @@ const getCategoryStyles = (category) => {
     default:
       return { bg: '#FDF2F8', text: '#C026D3', avatarBg: '#FBCFE8', avatarText: '#C026D3' };
   }
-};
-
-const formatLocationAddress = (place, coords) => {
-  const addressParts = [
-    place?.name,
-    place?.street,
-    place?.district,
-    place?.city,
-    place?.subregion,
-    place?.region,
-    place?.postalCode,
-  ].filter(Boolean);
-
-  if (addressParts.length > 0) {
-    return [...new Set(addressParts)].join(', ');
-  }
-
-  return `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`;
 };
 
 const FieldLabel = ({ label, required = false }) => (
@@ -1249,19 +1235,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const useCurrentLocation = async () => {
     try {
       setIsLocating(true);
-      const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
-      if (permissionStatus !== 'granted') {
-        Alert.alert('Location permission needed', 'Please allow location access to fill the meeting location.');
-        return;
-      }
-
-      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = position.coords;
-      const [place] = await Location.reverseGeocodeAsync({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-      });
-      const locationLabel = formatLocationAddress(place, coords);
+      const { place, locationLabel } = await getMeetingCurrentLocation();
 
       setRequestDraft((prev) => ({
         ...prev,
@@ -1271,7 +1245,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       }));
     } catch (locationError) {
       console.error('Error getting current location:', locationError.message);
-      Alert.alert('Location unavailable', 'Unable to fetch current location. Please enter it manually.');
+      const content = getMeetingLocationErrorContent(locationError, 'meeting location');
+      const buttons = content.canOpenSettings
+        ? [
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          { text: 'OK', style: 'cancel' },
+        ]
+        : [{ text: 'OK' }];
+      Alert.alert(content.title, content.message, buttons);
     } finally {
       setIsLocating(false);
     }
@@ -1280,19 +1261,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const useCurrentExecutionLocation = async () => {
     try {
       setIsLocating(true);
-      const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
-      if (permissionStatus !== 'granted') {
-        Alert.alert('Location permission needed', 'Please allow location access to fill the actual meeting location.');
-        return;
-      }
-
-      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = position.coords;
-      const [place] = await Location.reverseGeocodeAsync({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-      });
-      const locationLabel = formatLocationAddress(place, coords);
+      const { locationLabel } = await getMeetingCurrentLocation();
 
       setExecutionDraft((prev) => ({
         ...prev,
@@ -1300,7 +1269,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       }));
     } catch (locationError) {
       console.error('Error getting current execution location:', locationError.message);
-      Alert.alert('Location unavailable', 'Unable to fetch current location. Please enter it manually.');
+      const content = getMeetingLocationErrorContent(locationError, 'actual meeting location');
+      const buttons = content.canOpenSettings
+        ? [
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          { text: 'OK', style: 'cancel' },
+        ]
+        : [{ text: 'OK' }];
+      Alert.alert(content.title, content.message, buttons);
     } finally {
       setIsLocating(false);
     }
