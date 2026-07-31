@@ -49,7 +49,7 @@ const HomeScreen = ({ authToken }) => {
       fetchNotifications();
       fetchDailyPricingCount();
       checkPendingRequests();
-      return () => {};
+      return () => { };
     }, [updateLocation])
   );
 
@@ -410,8 +410,8 @@ const HomeScreen = ({ authToken }) => {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ScrollView style={styles.container}>
-        <Greeting 
-          firstName={employeeFirstName} 
+        <Greeting
+          firstName={employeeFirstName}
           message={greetingMessage}
           onProfilePress={() => navigation.navigate('UserProfile', { authToken })}
           onNotificationPress={() => navigation.navigate('Notifications1', { authToken })}
@@ -419,7 +419,7 @@ const HomeScreen = ({ authToken }) => {
         />
 
         <DailyPricingIndicator />
-        
+
         <TouchableOpacity
           style={styles.yesterdayButton}
           onPress={() => navigation.navigate('YesterdayStatsScreen', { authToken })}
@@ -479,7 +479,7 @@ const HomeScreen = ({ authToken }) => {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Pending Requests</Text>
-              <TouchableOpacity 
+              <TouchableOpacity
                 onPress={() => setIsPendingModalVisible(false)}
                 style={styles.closeButton}
               >
@@ -487,7 +487,7 @@ const HomeScreen = ({ authToken }) => {
               </TouchableOpacity>
             </View>
             <View style={styles.pendingRequestsContainer}>
-              <PendingCustomers 
+              <PendingCustomers
                 authToken={authToken}
                 onCustomerCreated={() => {
                   fetchVisitsData();

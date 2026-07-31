@@ -1,0 +1,4 @@
+name,mobileNumber,email,category,cityArea,companyShopProject,expected,categoryDetails,remarks
+CSV Test Dealer,9999999401,csv.dealer@example.com,dealer,Bangalore,CSV Test Shop,true,Primary dealer,Imported from sample CSV
+CSV Test Contractor,9999999402,,contractor,Bangalore,CSV Test Project,yes,Site contact,Imported from sample CSV
+CSV Test Architect,9999999403,csv.architect@example.com,architect,Bangalore,,1,Design contact,Imported from sample CSV

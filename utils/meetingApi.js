@@ -1,4 +1,5 @@
 import axios from 'axios';
+import * as FileSystem from 'expo-file-system';
 
 const API_BASE_URL = 'http://ec2-3-88-111-83.compute-1.amazonaws.com:8081';
 const CUSTOMER_API_BASE_URL = 'https://api.gajkesaristeels.in';
@@ -134,6 +135,19 @@ const normalizeTimeForUi = (time) => {
   return value;
 };
 
+const buildCompatibilityObjective = (request = {}) => [
+  request.objective,
+  request.purpose,
+  request.referenceName,
+  request.customerReference,
+  request.storeName,
+  request.location,
+  request.meetingType ? `${request.meetingType} meeting` : '',
+  'Meeting request',
+]
+  .map((value) => String(value || '').trim())
+  .find(Boolean);
+
 const toTitleCase = (value) => {
   if (!value) return '';
   return String(value)
@@ -188,12 +202,9 @@ const mapRequestToBackend = (request = {}, creatorId) => compactObject({
   location: request.location,
   customerReference: request.customerReference || request.referenceName,
   expectedAttendees: normalizeNumber(request.expectedTurnout || request.expectedAttendees || request.expectedAttendeeCount),
-  objective: request.objective || request.purpose,
-  expectedBusinessImpact: request.expectedBusinessImpact,
+  objective: buildCompatibilityObjective(request),
   expectedBudget: normalizeNumber(request.expectedBudget),
-  expectedGiftsMaterials: request.expectedGiftsMaterials || request.expectedMaterials,
   allowWalkInAttendees: request.allowWalkInAttendees === undefined ? true : request.allowWalkInAttendees,
-  remarks: request.remarks,
 });
 
 const jsonDetails = (items) => (Array.isArray(items) && items.length > 0 ? JSON.stringify(items) : undefined);
@@ -221,11 +232,10 @@ const buildPlanPayload = (payload = {}) => {
   return compactObject({
     expectedBudget: normalizeNumber(request.expectedBudget),
     plannedExpenseDetails: jsonDetails(plannedExpenses),
-    expectedGiftsMaterials: jsonDetails(plannedGifts) || request.expectedGiftsMaterials || request.expectedMaterials,
+    expectedGiftsMaterials: jsonDetails(plannedGifts),
     plannedGiftDetails: jsonDetails(plannedGifts),
     companyContribution: normalizeNumber(request.companyContribution),
     dealerContribution: normalizeNumber(request.dealerContribution),
-    budgetRemarks: request.budgetRemarks,
   });
 };
 
@@ -303,11 +313,6 @@ export const normalizeMeeting = (meeting = {}) => {
     || (isJsonDetails(requestSource.expectedGiftsMaterials) ? requestSource.expectedGiftsMaterials : '')
   );
   const plannedExpenses = parseJsonDetails(planSource.plannedExpenseDetails || requestSource.plannedExpenseDetails);
-  const expectedMaterialsText = [
-    requestSource.expectedMaterials,
-    requestSource.expectedGiftsMaterials,
-    planSource.expectedGiftsMaterials,
-  ].find((value) => value && !isJsonDetails(value)) || '';
   const actualAttendeeCount = meeting.actualAttendeeCount === undefined || meeting.actualAttendeeCount === null
     ? attendees.filter((attendee) => attendee.present).length
     : meeting.actualAttendeeCount;
@@ -384,19 +389,12 @@ export const normalizeMeeting = (meeting = {}) => {
       storeName: requestSource.storeName || meeting.storeName || meeting.dealerName || '',
       referenceName: requestSource.referenceName || requestSource.customerReference || '',
       customerReference: requestSource.customerReference || requestSource.referenceName || '',
-      purpose: requestSource.purpose || requestSource.objective || '',
-      objective: requestSource.objective || requestSource.purpose || '',
       expectedBudget: requestSource.expectedBudget || 0,
       expectedAttendeeCount,
       expectedTurnout,
-      expectedBusinessImpact: requestSource.expectedBusinessImpact || meeting.expectedBusinessImpact || '',
-      expectedMaterials: expectedMaterialsText,
-      expectedGiftsMaterials: expectedMaterialsText,
       companyContribution: planSource.companyContribution ?? requestSource.companyContribution ?? '',
       dealerContribution: planSource.dealerContribution ?? requestSource.dealerContribution ?? '',
-      budgetRemarks: planSource.budgetRemarks || requestSource.budgetRemarks || '',
       allowWalkInAttendees: requestSource.allowWalkInAttendees === undefined ? true : requestSource.allowWalkInAttendees,
-      remarks: requestSource.remarks || '',
     },
     attendees,
     expectedAttendees,
@@ -559,6 +557,71 @@ export const saveExpectedAttendees = async ({ authToken, meetingId, attendees })
     );
   }
   return response.data;
+};
+
+export const importMeetingAttendeesCsv = async ({ authToken, meetingId, file }) => {
+  if (!file?.uri) {
+    throw new Error('Select a CSV file before importing attendees.');
+  }
+
+  const url = getFullUrl({ url: `/meeting/attendees/import${buildQuery({ id: meetingId })}` });
+  const headers = {
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    'ngrok-skip-browser-warning': 'true',
+  };
+
+  console.log('[Meeting API Request]', {
+    method: 'POST',
+    url,
+    auth: authToken ? 'present' : 'missing',
+    payload: {
+      fileName: file.name || `meeting-${meetingId}-attendees.csv`,
+      mimeType: 'text/csv',
+    },
+  });
+
+  try {
+    const response = await FileSystem.uploadAsync(url, file.uri, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: 'file',
+      mimeType: 'text/csv',
+      headers,
+    });
+    let data = response.body;
+
+    try {
+      data = response.body ? JSON.parse(response.body) : null;
+    } catch (_error) {
+      // Plain-text success and validation messages are valid API responses.
+    }
+
+    if (response.status < 200 || response.status >= 300) {
+      const error = new Error(
+        typeof data === 'string' ? data : data?.message || data?.error || 'Unable to import attendee CSV.'
+      );
+      error.response = { status: response.status, data };
+      throw error;
+    }
+
+    console.log('[Meeting API Response]', {
+      method: 'POST',
+      url,
+      status: response.status,
+      data,
+    });
+    return data;
+  } catch (error) {
+    console.log('[Meeting API Error]', {
+      method: 'POST',
+      url,
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message,
+      auth: authToken ? 'present' : 'missing',
+    });
+    throw error;
+  }
 };
 
 export const deleteExpectedAttendee = async ({ authToken, meetingId, meetingAttendeeId }) => {

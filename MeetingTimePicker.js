@@ -98,7 +98,7 @@ const WheelColumn = ({ label, options, value, renderValue, onSelect }) => {
   );
 };
 
-const MeetingTimePicker = ({ label = 'Time', value, onChange, placeholder = 'Select time', required = false }) => {
+const MeetingTimePicker = ({ label = 'Time', value, onChange, placeholder = 'Select time', required = false, compact = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [draftTime, setDraftTime] = useState(() => parseApiTime(value) || getCurrentTimeParts());
 
@@ -127,14 +127,18 @@ const MeetingTimePicker = ({ label = 'Time', value, onChange, placeholder = 'Sel
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}{required ? <Text style={styles.requiredStar}> *</Text> : null}</Text>
-      <TouchableOpacity style={styles.timeSelect} onPress={() => setIsOpen(true)} activeOpacity={0.85}>
-        <View style={styles.timeIcon}>
-          <Ionicons name="time-outline" size={18} color="#4F46E5" />
+      <TouchableOpacity style={[styles.timeSelect, compact && styles.timeSelectCompact]} onPress={() => setIsOpen(true)} activeOpacity={0.85}>
+        <View style={[styles.timeIcon, compact && styles.timeIconCompact]}>
+          <Ionicons name="time-outline" size={compact ? 16 : 18} color="#4F46E5" />
         </View>
-        <Text style={[styles.timeSelectText, !displayValue && styles.placeholderText]}>
+        <Text
+          style={[styles.timeSelectText, compact && styles.timeSelectTextCompact, !displayValue && styles.placeholderText]}
+          numberOfLines={1}
+          ellipsizeMode="clip"
+        >
           {displayValue || placeholder}
         </Text>
-        <Ionicons name="chevron-down" size={18} color="#64748B" />
+        <Ionicons name="chevron-down" size={compact ? 16 : 18} color="#64748B" />
       </TouchableOpacity>
 
       <Modal visible={isOpen} transparent animationType="slide" onRequestClose={() => setIsOpen(false)}>
@@ -224,6 +228,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  timeSelectCompact: {
+    minHeight: 42,
+    paddingHorizontal: 8,
+  },
   timeIcon: {
     width: 30,
     height: 30,
@@ -233,11 +241,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
   },
+  timeIconCompact: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginRight: 6,
+  },
   timeSelectText: {
     flex: 1,
     color: '#111827',
     fontSize: 15,
     fontWeight: '800',
+  },
+  timeSelectTextCompact: {
+    fontSize: 13,
+    flexShrink: 1,
   },
   placeholderText: {
     color: '#94A3B8',

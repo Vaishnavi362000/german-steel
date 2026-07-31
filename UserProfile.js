@@ -60,7 +60,7 @@ const UserProfile = ({ authToken, onLogout }) => {
   return (
     <View style={styles.container}>
       <View style={styles.versionContainer}>
-        <Text style={styles.versionText}>v3.1</Text>
+        <Text style={styles.versionText}>v3.2</Text>
       </View>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <View style={styles.header}>

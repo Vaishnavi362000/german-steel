@@ -16,6 +16,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { useNavigation } from '@react-navigation/native';
 import MeetingAttendeePicker from './MeetingAttendeePicker';
 import MeetingDealerShopPicker from './MeetingDealerShopPicker';
@@ -41,6 +43,10 @@ import {
   getMeetingTypes,
   submitMeeting,
 } from './utils/meetingApi';
+import {
+  formatAttendeeImportErrors,
+  parseAttendeeImportWorkbook,
+} from './utils/attendeeImport';
 
 const formatDateForInput = (date) => {
   const value = date instanceof Date ? date : new Date(date);
@@ -63,15 +69,10 @@ const initialRequest = {
   storeId: '',
   storeName: '',
   referenceName: '',
-  purpose: '',
-  expectedBusinessImpact: '',
   expectedTurnout: '',
   expectedBudget: '',
   companyContribution: '',
   dealerContribution: '',
-  budgetRemarks: '',
-  expectedMaterials: '',
-  remarks: '',
 };
 
 const initialAttendee = {
@@ -130,6 +131,27 @@ const getCategoryStyles = (category) => {
 };
 
 const steps = ['Request', 'Attendees', 'Review'];
+
+const stripRemovedMeetingFields = ({
+  purpose,
+  objective,
+  expectedBusinessImpact,
+  budgetRemarks,
+  expectedMaterials,
+  expectedGiftsMaterials,
+  remarks,
+  ...request
+} = {}) => request;
+
+const calculateDealerContribution = (expectedBudget, companyContribution) => {
+  if (!String(expectedBudget ?? '').trim() || !String(companyContribution ?? '').trim()) return '';
+
+  const budget = Number(expectedBudget);
+  const company = Number(companyContribution);
+  if (Number.isNaN(budget) || Number.isNaN(company) || budget < 0 || company < 0) return '';
+
+  return String(Math.max(0, Math.round((budget - company) * 100) / 100));
+};
 
 const FieldLabel = ({ label, required = false }) => (
   <Text style={styles.label}>{label}{required ? <Text style={styles.requiredStar}> *</Text> : null}</Text>
@@ -293,7 +315,7 @@ const NewMeeting = ({ route, authToken }) => {
   const initialRequestFromRoute = route?.params?.initialRequest || {};
   const initialAttendeesFromRoute = route?.params?.initialAttendees || [];
   const [currentStep, setCurrentStep] = useState(0);
-  const [request, setRequest] = useState({ ...initialRequest, ...initialRequestFromRoute });
+  const [request, setRequest] = useState({ ...initialRequest, ...stripRemovedMeetingFields(initialRequestFromRoute) });
   const [attendees, setAttendees] = useState(initialAttendeesFromRoute);
   const [attendeeDraft, setAttendeeDraft] = useState(initialAttendee);
   const [plannedExpenses, setPlannedExpenses] = useState(route?.params?.initialPlannedExpenses || []);
@@ -308,6 +330,7 @@ const NewMeeting = ({ route, authToken }) => {
   const [dealerShops, setDealerShops] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isImportingAttendees, setIsImportingAttendees] = useState(false);
   const [isMeetingDatePickerOpen, setIsMeetingDatePickerOpen] = useState(false);
   const [isAttendeePickerOpen, setIsAttendeePickerOpen] = useState(false);
   const [isDealerPickerOpen, setIsDealerPickerOpen] = useState(false);
@@ -378,7 +401,13 @@ const NewMeeting = ({ route, authToken }) => {
   }, [authToken]);
 
   const updateRequest = (field, value) => {
-    setRequest((prev) => ({ ...prev, [field]: value }));
+    setRequest((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === 'expectedBudget' || field === 'companyContribution') {
+        next.dealerContribution = calculateDealerContribution(next.expectedBudget, next.companyContribution);
+      }
+      return next;
+    });
   };
 
   const selectMeetingState = (value) => {
@@ -410,9 +439,7 @@ const NewMeeting = ({ route, authToken }) => {
       ['city', 'city'],
       ['state', 'state'],
       ['location', 'location'],
-      ['purpose', 'purpose/objective'],
-      ['expectedBusinessImpact', 'expected business impact'],
-      ['expectedTurnout', 'expected turnout'],
+      ['expectedTurnout', 'expected people'],
       ['expectedBudget', 'expected budget'],
     ];
 
@@ -447,13 +474,13 @@ const NewMeeting = ({ route, authToken }) => {
     const expectedTurnout = Number(request.expectedTurnout);
     if (Number.isNaN(expectedTurnout) || expectedTurnout <= 0) {
       setCurrentStep(0);
-      Alert.alert('Invalid turnout', 'Expected turnout should be greater than zero.');
+      Alert.alert('Invalid expected people', 'Expected People should be greater than zero.');
       return false;
     }
 
     if (expectedTurnout < attendees.length) {
       setCurrentStep(0);
-      Alert.alert('Invalid turnout', 'Expected turnout cannot be lower than named attendees added.');
+      Alert.alert('Invalid expected people', 'Expected People cannot be lower than named attendees added.');
       return false;
     }
 
@@ -571,7 +598,6 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setAttendeeDraft(initialAttendee);
-    setIsAttendeeFormOpen(false);
   };
 
   const removeAttendee = (attendeeId) => {
@@ -594,7 +620,6 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setPlannedExpenseDraft(initialPlannedExpense);
-    setIsPlannedExpenseFormOpen(false);
   };
 
   const removePlannedExpense = (id) => {
@@ -619,7 +644,6 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setPlannedGiftDraft(initialPlannedGift);
-    setIsPlannedGiftFormOpen(false);
   };
 
   const removePlannedGift = (id) => {
@@ -651,7 +675,6 @@ const NewMeeting = ({ route, authToken }) => {
       },
     ]);
     setAttendeeCategoryOptions((prev) => mergeOptions(prev, [attendee.category]));
-    setIsAttendeePickerOpen(false);
   };
 
   const openAttendeePicker = async () => {
@@ -668,6 +691,63 @@ const NewMeeting = ({ route, authToken }) => {
     } finally {
       setHasLoadedAttendeeMaster(true);
       setIsLoadingAttendeeMaster(false);
+    }
+  };
+
+  const importAttendeesFromFile = async () => {
+    try {
+      setIsImportingAttendees(true);
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+          'text/csv',
+          'application/csv',
+          'text/comma-separated-values',
+        ],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || result.type === 'cancel') return;
+
+      const asset = result.assets?.[0] || result;
+      if (!asset?.uri) {
+        Alert.alert('Import failed', 'Unable to read the selected attendee file.');
+        return;
+      }
+
+      const base64Workbook = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const { attendees: importedAttendees, errors } = parseAttendeeImportWorkbook(base64Workbook, {
+        existingAttendees: attendees,
+      });
+
+      if (errors.length > 0) {
+        Alert.alert('Attendee import failed', formatAttendeeImportErrors(errors));
+        return;
+      }
+
+      const importedWithIds = importedAttendees.map((attendee, index) => ({
+        ...attendee,
+        id: `import-${Date.now()}-${index}-${attendee.mobile}`,
+      }));
+      const nextAttendeeCount = attendees.length + importedWithIds.length;
+
+      setAttendees((prev) => [...prev, ...importedWithIds]);
+      setAttendeeCategoryOptions((prev) => mergeOptions(prev, importedWithIds.map((attendee) => attendee.category)));
+      setRequest((prev) => {
+        const expectedPeople = Number(prev.expectedTurnout || 0);
+        return expectedPeople < nextAttendeeCount
+          ? { ...prev, expectedTurnout: String(nextAttendeeCount) }
+          : prev;
+      });
+      Alert.alert('Attendees imported', `${importedWithIds.length} attendee${importedWithIds.length === 1 ? '' : 's'} added.`);
+    } catch (importError) {
+      console.error('Error importing attendees:', importError.message || importError);
+      Alert.alert('Import failed', 'Unable to read this attendee CSV or Excel file.');
+    } finally {
+      setIsImportingAttendees(false);
     }
   };
 
@@ -737,11 +817,12 @@ const NewMeeting = ({ route, authToken }) => {
 
   const buildPayload = async () => {
     const employeeId = await AsyncStorage.getItem('employeeId');
+    const requestPayload = stripRemovedMeetingFields(request);
     return {
       creatorId: employeeId,
       request: {
-        ...request,
-        expectedTurnout: request.expectedTurnout,
+        ...requestPayload,
+        expectedTurnout: requestPayload.expectedTurnout,
         namedAttendeeCount: attendees.length,
       },
       expectedAttendees: attendees.map(({ id, ...attendee }) => attendee),
@@ -900,26 +981,10 @@ const NewMeeting = ({ route, authToken }) => {
         placeholder="Optional extra context"
       />
       <Field
-        label="Purpose / Objective"
-        value={request.purpose}
-        onChangeText={(value) => updateRequest('purpose', value)}
-        placeholder="What should this meeting achieve?"
-        multiline
-        required
-      />
-      <Field
-        label="Expected Business Impact"
-        value={request.expectedBusinessImpact}
-        onChangeText={(value) => updateRequest('expectedBusinessImpact', value)}
-        placeholder="Example: Generate five contractor leads and 20 tonnes expected monthly demand."
-        multiline
-        required
-      />
-      <Field
-        label="Expected Turnout"
+        label="Expected People"
         value={request.expectedTurnout}
         onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))}
-        placeholder="Planned total attendees"
+        placeholder="Expected people count"
         keyboardType="numeric"
         required
       />
@@ -930,13 +995,6 @@ const NewMeeting = ({ route, authToken }) => {
         placeholder="Amount"
         keyboardType="numeric"
         required
-      />
-      <Field
-        label="Gift / Material Notes"
-        value={request.expectedMaterials}
-        onChangeText={(value) => updateRequest('expectedMaterials', value)}
-        placeholder="Optional notes, e.g. brochures or samples to carry"
-        multiline
       />
       <View style={styles.planCard}>
         <View style={styles.planCardHeader}>
@@ -968,13 +1026,6 @@ const NewMeeting = ({ route, authToken }) => {
             />
           </View>
         </View>
-        <Field
-          label="Budget Remarks"
-          value={request.budgetRemarks}
-          onChangeText={(value) => updateRequest('budgetRemarks', value)}
-          placeholder="Contribution notes"
-          multiline
-        />
       </View>
 
       <View style={styles.planCard}>
@@ -1011,7 +1062,7 @@ const NewMeeting = ({ route, authToken }) => {
             />
             <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
               <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
-              <Text style={styles.secondaryButtonText}>Save Planned Expense</Text>
+              <Text style={styles.secondaryButtonText}>Add Planned Expense</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -1083,7 +1134,7 @@ const NewMeeting = ({ route, authToken }) => {
             </View>
             <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
               <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
-              <Text style={styles.secondaryButtonText}>Save Planned Gift</Text>
+              <Text style={styles.secondaryButtonText}>Add Planned Gift</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -1106,13 +1157,6 @@ const NewMeeting = ({ route, authToken }) => {
           </View>
         ))}
       </View>
-      <Field
-        label="Remarks"
-        value={request.remarks}
-        onChangeText={(value) => updateRequest('remarks', value)}
-        placeholder="Optional notes"
-        multiline
-      />
       <MeetingDealerShopPicker
         visible={isDealerPickerOpen}
         shops={dealerShops}
@@ -1135,11 +1179,29 @@ const NewMeeting = ({ route, authToken }) => {
     <View style={styles.section}>
       <Text style={styles.sectionEyebrow}>Step 2 of 3</Text>
       <Text style={styles.sectionTitle}>Expected Attendees <Text style={styles.requiredStar}>*</Text></Text>
-      <Text style={styles.sectionSubtitle}>Expected turnout: {request.expectedTurnout || 0}. Add named attendees separately; mobile numbers must stay unique.</Text>
+      <Text style={styles.sectionSubtitle}>
+        Expected People: {request.expectedTurnout || 0}{'\n'}
+        Add named attendees separately; mobile numbers must stay unique.
+      </Text>
       <TouchableOpacity style={styles.existingButton} onPress={openAttendeePicker}>
         <Ionicons name="search-outline" size={18} color="#4F46E5" />
         <Text style={styles.existingButtonText}>Select Existing Attendee</Text>
       </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.addInlineButton, isImportingAttendees && styles.buttonDisabled]}
+        onPress={importAttendeesFromFile}
+        disabled={isImportingAttendees}
+      >
+        {isImportingAttendees ? (
+          <ActivityIndicator size="small" color="#4F46E5" />
+        ) : (
+          <Ionicons name="cloud-upload-outline" size={18} color="#4F46E5" />
+        )}
+        <Text style={styles.addInlineButtonText}>
+          {isImportingAttendees ? 'Importing Attendees...' : 'Import Attendees'}
+        </Text>
+      </TouchableOpacity>
+      {/* Manual attendee entry is temporarily disabled while CSV import is the preferred flow.
       {isAttendeeFormOpen ? (
         <View style={styles.inlineFormCard}>
           <View style={styles.inlineFormHeader}>
@@ -1193,6 +1255,7 @@ const NewMeeting = ({ route, authToken }) => {
           <Text style={styles.addInlineButtonText}>Add New Attendee</Text>
         </TouchableOpacity>
       )}
+      */}
 
       <View style={styles.attendeeList}>
         <Text style={styles.subTitle}>Added Attendees ({attendees.length})</Text>
@@ -1300,25 +1363,11 @@ const NewMeeting = ({ route, authToken }) => {
       </View>
       
       <View style={styles.reviewGroupCard}>
-        <Text style={styles.reviewGroupTitle}>Objectives & Resources</Text>
-        
-        <View style={styles.reviewFieldBlock}>
-          <Text style={styles.reviewFieldLabel}>Purpose / Objective</Text>
-          <Text style={styles.reviewFieldValue}>{request.purpose || 'No purpose added'}</Text>
-        </View>
+        <Text style={styles.reviewGroupTitle}>People & Resources</Text>
 
-        <View style={styles.reviewDivider} />
-
-        <View style={styles.reviewFieldBlock}>
-          <Text style={styles.reviewFieldLabel}>Expected Business Impact</Text>
-          <Text style={styles.reviewFieldValue}>{request.expectedBusinessImpact || 'No expected impact added'}</Text>
-        </View>
-        
-        <View style={styles.reviewDivider} />
-        
         <View style={styles.reviewTwoColumn}>
           <View style={styles.reviewHalfField}>
-            <Text style={styles.reviewFieldLabel}>Expected Turnout</Text>
+            <Text style={styles.reviewFieldLabel}>Expected People</Text>
             <Text style={styles.reviewFieldValue}>{request.expectedTurnout || 0}</Text>
           </View>
           <View style={styles.reviewHalfField}>
@@ -1329,15 +1378,9 @@ const NewMeeting = ({ route, authToken }) => {
 
         <View style={styles.reviewDivider} />
 
-        <View style={styles.reviewTwoColumn}>
-          <View style={styles.reviewHalfField}>
-            <Text style={styles.reviewFieldLabel}>Expected Budget</Text>
-            <Text style={[styles.reviewFieldValue, styles.reviewBudgetText]}>Rs. {request.expectedBudget || 0}</Text>
-          </View>
-          <View style={styles.reviewHalfField}>
-            <Text style={styles.reviewFieldLabel}>Gift / Material Notes</Text>
-            <Text style={styles.reviewFieldValue}>{request.expectedMaterials || 'None added'}</Text>
-          </View>
+        <View style={styles.reviewFieldBlock}>
+          <Text style={styles.reviewFieldLabel}>Expected Budget</Text>
+          <Text style={[styles.reviewFieldValue, styles.reviewBudgetText]}>Rs. {request.expectedBudget || 0}</Text>
         </View>
       </View>
 
@@ -1387,15 +1430,6 @@ const NewMeeting = ({ route, authToken }) => {
             <Text key={item.id} style={styles.reviewFieldValue}>- {item.giftItem} x {item.quantity}: Rs. {item.estimatedAmount}</Text>
           ))}
         </View>
-        {request.budgetRemarks ? (
-          <>
-            <View style={styles.reviewDivider} />
-            <View style={styles.reviewFieldBlock}>
-              <Text style={styles.reviewFieldLabel}>Budget Remarks</Text>
-              <Text style={styles.reviewFieldValue}>{request.budgetRemarks}</Text>
-            </View>
-          </>
-        ) : null}
       </View>
       
       <View style={styles.reviewGroupCard}>
@@ -1997,6 +2031,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
     marginBottom: 12,
+  },
+  buttonDisabled: {
+    opacity: 0.65,
   },
   addInlineButtonText: {
     marginLeft: 8,

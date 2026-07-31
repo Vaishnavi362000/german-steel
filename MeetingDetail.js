@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as DocumentPicker from 'expo-document-picker';
 import MeetingAttendeePicker from './MeetingAttendeePicker';
 import MeetingDealerShopPicker from './MeetingDealerShopPicker';
 import {
@@ -45,6 +46,7 @@ import {
   getMeetingTypes,
   getStatusColor,
   getStatusLabel,
+  importMeetingAttendeesCsv,
   isTabUnlocked,
   markNoExpenses,
   markNoGifts,
@@ -75,15 +77,31 @@ const emptyRequest = {
   storeId: '',
   storeName: '',
   referenceName: '',
-  purpose: '',
-  expectedBusinessImpact: '',
   expectedTurnout: '',
   expectedBudget: '',
   companyContribution: '',
   dealerContribution: '',
-  budgetRemarks: '',
-  expectedMaterials: '',
-  remarks: '',
+};
+
+const stripRemovedMeetingFields = ({
+  purpose,
+  objective,
+  expectedBusinessImpact,
+  budgetRemarks,
+  expectedMaterials,
+  expectedGiftsMaterials,
+  remarks,
+  ...request
+} = {}) => request;
+
+const calculateDealerContribution = (expectedBudget, companyContribution) => {
+  if (!String(expectedBudget ?? '').trim() || !String(companyContribution ?? '').trim()) return '';
+
+  const budget = Number(expectedBudget);
+  const company = Number(companyContribution);
+  if (Number.isNaN(budget) || Number.isNaN(company) || budget < 0 || company < 0) return '';
+
+  return String(Math.max(0, Math.round((budget - company) * 100) / 100));
 };
 
 const initialPlannedExpense = {
@@ -128,7 +146,6 @@ const emptyGiftDraft = {
   meetingAttendeeIds: [],
   giftItem: '',
   quantity: '1',
-  remarks: '',
 };
 
 const emptyExpenseDraft = {
@@ -138,7 +155,6 @@ const emptyExpenseDraft = {
   companyAmount: '',
   dealerAmount: '',
   expenseDate: todayString(),
-  remarks: '',
 };
 
 const emptyReportDraft = {
@@ -150,7 +166,6 @@ const emptyReportDraft = {
   interestedCustomers: '',
   competitorInformation: '',
   actualBusinessOutcome: '',
-  finalRemarks: '',
 };
 
 const normalizeMobile = (value) => String(value || '').replace(/\D/g, '');
@@ -210,6 +225,10 @@ const getGiftLineAttendeeId = (gift = {}) => String(
   || ''
 );
 const getExpenseLineId = (expense = {}) => expense.expenseId || expense.id || expense.meetingExpenseId;
+const normalizeExpenseHead = (value) => String(value || '').trim().toLowerCase();
+const isGiftExpenseHead = (value) => ['gift', 'gifts'].includes(normalizeExpenseHead(value));
+const roundMoney = (value) => Math.round(Number(value || 0) * 100) / 100;
+const AUTO_GIFT_EXPENSE_REMARKS = 'Automatically calculated from issued gifts';
 const normalizeCompletionState = (value) => String(value || '').trim().replace(/[\s-]+/g, '_').toUpperCase();
 const getCorrectionTabFromStage = (value) => {
   const stage = normalizeCompletionState(value);
@@ -324,7 +343,7 @@ const SelectField = ({ label, value, placeholder, options = [], onSelect, disabl
 
       <Modal visible={isOpen} transparent animationType="fade" onRequestClose={() => setIsOpen(false)}>
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsOpen(false)}>
-          <TouchableOpacity style={styles.selectSheet} activeOpacity={1} onPress={() => {}}>
+          <TouchableOpacity style={styles.selectSheet} activeOpacity={1} onPress={() => { }}>
             <View style={styles.selectSheetHeader}>
               <Text style={styles.selectSheetTitle}>{label}</Text>
               <TouchableOpacity style={styles.sheetCloseButton} onPress={() => setIsOpen(false)}>
@@ -426,7 +445,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const [hasGiftChanges, setHasGiftChanges] = useState(false);
   const [expenseLines, setExpenseLines] = useState([]);
   const [expenseDraft, setExpenseDraft] = useState(emptyExpenseDraft);
-  const [expenseRemarks, setExpenseRemarks] = useState('');
   const [reportDraft, setReportDraft] = useState(emptyReportDraft);
   const [leadEntries, setLeadEntries] = useState([]);
   const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
@@ -441,6 +459,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isImportingAttendees, setIsImportingAttendees] = useState(false);
   const [isAttendeePickerOpen, setIsAttendeePickerOpen] = useState(false);
   const [isDealerPickerOpen, setIsDealerPickerOpen] = useState(false);
   const [isExpectedAttendeeFormOpen, setIsExpectedAttendeeFormOpen] = useState(false);
@@ -521,7 +540,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   ].includes(status);
 
   const hydrateMeeting = useCallback((data) => {
-    const hydratedRequest = { ...emptyRequest, ...getRequest(data) };
+    const hydratedRequest = { ...emptyRequest, ...stripRemovedMeetingFields(getRequest(data)) };
     const expectedSource = Array.isArray(data?.expectedAttendees) ? data.expectedAttendees : [];
     const allAttendeeSource = Array.isArray(data?.attendees) && data.attendees.length > 0
       ? data.attendees
@@ -567,7 +586,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       deriveAttendeeCategoryOptions(normalizedExpectedAttendees),
       deriveAttendeeCategoryOptions(normalizedActualAttendees)
     ));
-    setExpenseRemarks(data?.expenseRemarks || data?.expenseSubmissionRemarks || '');
     const initialLeadEntries = parseLeadEntries(data?.leadDetails || data?.interestedCustomers || '');
     setReportDraft({
       meetingSummary: data?.meetingSummary || '',
@@ -578,7 +596,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       interestedCustomers: '',
       competitorInformation: data?.competitorInformation || '',
       actualBusinessOutcome: data?.actualBusinessOutcome || '',
-      finalRemarks: data?.finalRemarks || '',
     });
     setLeadEntries(initialLeadEntries);
     setIsExecutionStarted(Boolean(data?.actualMeetingDate || data?.actualLocation || isExecutionCompleteStatus(currentStatus)));
@@ -735,10 +752,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     () => giftLines.reduce((sum, gift) => sum + Number(gift.quantity || 0), 0),
     [giftLines]
   );
-  const expenseTotal = useMemo(
-    () => expenseLines.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
-    [expenseLines]
-  );
   const plannedExpenseTotal = useMemo(
     () => plannedExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0),
     [plannedExpenses]
@@ -746,6 +759,91 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const plannedGiftTotal = useMemo(
     () => plannedGifts.reduce((sum, item) => sum + Number(item.estimatedAmount || 0), 0),
     [plannedGifts]
+  );
+  const plannedExpenseRecords = useMemo(
+    () => plannedExpenses
+      .map((item, sourceIndex) => ({ item, sourceIndex }))
+      .filter(({ item }) => !isGiftExpenseHead(item.expenseHead)),
+    [plannedExpenses]
+  );
+  const recordedPlannedExpenseIndexes = useMemo(() => {
+    const claimedActualExpenseIndexes = new Set();
+    const recordedIndexes = new Set();
+
+    plannedExpenseRecords.forEach(({ item, sourceIndex }) => {
+      const actualExpenseIndex = expenseLines.findIndex((expense, expenseIndex) => (
+        !claimedActualExpenseIndexes.has(expenseIndex)
+        && normalizeExpenseHead(expense.expenseHead) === normalizeExpenseHead(item.expenseHead)
+      ));
+      if (actualExpenseIndex >= 0) {
+        claimedActualExpenseIndexes.add(actualExpenseIndex);
+        recordedIndexes.add(sourceIndex);
+      }
+    });
+
+    return recordedIndexes;
+  }, [expenseLines, plannedExpenseRecords]);
+  const issuedGiftExpense = useMemo(() => {
+    const plannedGiftCosts = new Map();
+    plannedGifts.forEach((gift) => {
+      const itemName = String(gift.giftItem || gift.item || '').trim();
+      const quantity = Number(gift.quantity || 0);
+      const estimatedAmount = Number(gift.estimatedAmount || gift.amount || 0);
+      if (!itemName || quantity <= 0 || estimatedAmount < 0) return;
+
+      const key = itemName.toLowerCase();
+      const existing = plannedGiftCosts.get(key) || { quantity: 0, estimatedAmount: 0 };
+      plannedGiftCosts.set(key, {
+        quantity: existing.quantity + quantity,
+        estimatedAmount: existing.estimatedAmount + estimatedAmount,
+      });
+    });
+
+    const issuedGiftQuantities = new Map();
+    giftLines.forEach((gift) => {
+      const itemName = String(gift.giftItem || gift.item || '').trim();
+      const quantity = Number(gift.quantity || 0);
+      if (!itemName || quantity <= 0) return;
+
+      const key = itemName.toLowerCase();
+      issuedGiftQuantities.set(key, (issuedGiftQuantities.get(key) || 0) + quantity);
+    });
+
+    return Array.from(issuedGiftQuantities.entries()).reduce((summary, [itemName, issuedQuantity]) => {
+      const plannedGift = plannedGiftCosts.get(itemName);
+      if (!plannedGift?.quantity || plannedGift.estimatedAmount <= 0) return summary;
+
+      return {
+        quantity: summary.quantity + issuedQuantity,
+        amount: roundMoney(summary.amount + ((issuedQuantity / plannedGift.quantity) * plannedGift.estimatedAmount)),
+      };
+    }, { quantity: 0, amount: 0 });
+  }, [giftLines, plannedGifts]);
+  const hasSavedGiftExpense = useMemo(
+    () => expenseLines.some((expense) => isGiftExpenseHead(expense.expenseHead)),
+    [expenseLines]
+  );
+  const calculatedGiftExpenseLine = useMemo(() => {
+    if (issuedGiftExpense.amount <= 0 || hasSavedGiftExpense) return null;
+
+    return {
+      expenseHead: 'gifts',
+      amount: issuedGiftExpense.amount,
+      paidBy: 'COMPANY',
+      companyAmount: issuedGiftExpense.amount,
+      dealerAmount: 0,
+      expenseDate: executionDraft.actualMeetingDate || todayString(),
+      remarks: AUTO_GIFT_EXPENSE_REMARKS,
+      isCalculatedGiftExpense: true,
+    };
+  }, [executionDraft.actualMeetingDate, hasSavedGiftExpense, issuedGiftExpense.amount]);
+  const actualExpenseLines = useMemo(
+    () => (calculatedGiftExpenseLine ? [...expenseLines, calculatedGiftExpenseLine] : expenseLines),
+    [calculatedGiftExpenseLine, expenseLines]
+  );
+  const expenseTotal = useMemo(
+    () => actualExpenseLines.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
+    [actualExpenseLines]
   );
   const cleanLeadEntries = useMemo(() => getCleanLeadEntries(leadEntries), [leadEntries]);
   const reportLeadCount = cleanLeadEntries.length;
@@ -756,7 +854,13 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const expensesExceedBudget = expenseTotal > expectedBudget;
 
   const updateRequest = (field, value) => {
-    setRequestDraft((prev) => ({ ...prev, [field]: value }));
+    setRequestDraft((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === 'expectedBudget' || field === 'companyContribution') {
+        next.dealerContribution = calculateDealerContribution(next.expectedBudget, next.companyContribution);
+      }
+      return next;
+    });
   };
 
   const selectRequestState = (value) => {
@@ -874,9 +978,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       ['city', 'city'],
       ['state', 'state'],
       ['location', 'location'],
-      ['purpose', 'purpose'],
-      ['expectedBusinessImpact', 'expected business impact'],
-      ['expectedTurnout', 'expected turnout'],
+      ['expectedTurnout', 'expected people'],
       ['expectedBudget', 'expected budget'],
     ];
 
@@ -904,12 +1006,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
 
     const expectedTurnout = Number(requestDraft.expectedTurnout);
     if (Number.isNaN(expectedTurnout) || expectedTurnout <= 0) {
-      Alert.alert('Invalid turnout', 'Expected turnout should be greater than zero.');
+      Alert.alert('Invalid expected people', 'Expected People should be greater than zero.');
       return false;
     }
 
     if (expectedTurnout < expectedAttendees.length) {
-      Alert.alert('Invalid turnout', 'Expected turnout cannot be lower than named attendees added.');
+      Alert.alert('Invalid expected people', 'Expected People cannot be lower than named attendees added.');
       return false;
     }
 
@@ -978,13 +1080,14 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const saveMeeting = async (showSuccess = true) => {
     try {
       setIsSaving(true);
+      const requestPayload = stripRemovedMeetingFields(requestDraft);
       await editMeeting({
         authToken,
         meetingId,
         payload: {
           request: {
-            ...requestDraft,
-            expectedTurnout: requestDraft.expectedTurnout,
+            ...requestPayload,
+            expectedTurnout: requestPayload.expectedTurnout,
             namedAttendeeCount: expectedAttendees.length,
           },
           expectedAttendees: expectedAttendees.map(({ id, ...attendee }) => attendee),
@@ -1065,10 +1168,9 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     navigation.navigate('NewMeeting', {
       authToken,
       initialRequest: {
-        ...request,
+        ...stripRemovedMeetingFields(request),
         meetingDate: todayString(),
         meetingTime: '',
-        remarks: '',
       },
       initialAttendees: expectedAttendees.map((attendee) => ({
         name: attendee.name,
@@ -1098,7 +1200,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setPlannedExpenseDraft(initialPlannedExpense);
-    setIsPlannedExpenseFormOpen(false);
   };
 
   const removePlannedExpense = (id) => {
@@ -1123,7 +1224,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setPlannedGiftDraft(initialPlannedGift);
-    setIsPlannedGiftFormOpen(false);
   };
 
   const removePlannedGift = (id) => {
@@ -1146,7 +1246,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     }
     setExpectedAttendees((prev) => [...prev, { ...attendeeDraft, mobile, id: `expected-${Date.now()}` }]);
     setAttendeeDraft(emptyAttendee);
-    setIsExpectedAttendeeFormOpen(false);
   };
 
   const addExistingAttendee = (attendee) => {
@@ -1174,7 +1273,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setAttendeeCategoryOptions((prev) => mergeOptions(prev, [attendee.category]));
-    setIsAttendeePickerOpen(false);
   };
 
   const openAttendeePicker = async () => {
@@ -1191,6 +1289,51 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     } finally {
       setHasLoadedAttendeeMaster(true);
       setIsLoadingAttendeeMaster(false);
+    }
+  };
+
+  const importExpectedAttendeesFromFile = async () => {
+    try {
+      setIsImportingAttendees(true);
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'text/csv',
+          'application/csv',
+          'text/comma-separated-values',
+        ],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || result.type === 'cancel') return;
+
+      const asset = result.assets?.[0] || result;
+      if (!asset?.uri) {
+        Alert.alert('Import failed', 'Unable to read the selected attendee file.');
+        return;
+      }
+
+      if (!String(asset.name || '').toLowerCase().endsWith('.csv')) {
+        Alert.alert('CSV file required', 'Select a CSV file with attendee rows to import.');
+        return;
+      }
+
+      await importMeetingAttendeesCsv({
+        authToken,
+        meetingId,
+        file: asset,
+      });
+
+      await fetchMeeting();
+      Alert.alert('Attendees imported', 'The attendee list has been updated.');
+    } catch (importError) {
+      const responseData = importError?.response?.data;
+      const message = typeof responseData === 'string'
+        ? responseData
+        : responseData?.message || responseData?.error || 'Unable to import this attendee CSV file.';
+      console.error('Error importing attendees:', responseData || importError.message || importError);
+      Alert.alert('Import failed', message);
+    } finally {
+      setIsImportingAttendees(false);
     }
   };
 
@@ -1319,7 +1462,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setWalkInDraft(emptyWalkInAttendee);
-    setIsWalkInFormOpen(false);
   };
 
   const quickAddExistingWalkIn = (attendee) => {
@@ -1350,7 +1492,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
       },
     ]);
     setWalkInDraft(emptyWalkInAttendee);
-    setIsWalkInFormOpen(false);
   };
 
   const submitExecution = async () => {
@@ -1494,7 +1635,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         attendeeName: attendee.name,
         giftItem,
         quantity,
-        remarks: giftDraft.remarks,
       }))
       .filter((gift) => !existingGiftKeys.has(`${String(gift.meetingAttendeeId)}|${gift.giftItem.toLowerCase()}`));
 
@@ -1509,7 +1649,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     ]);
     setHasGiftChanges(true);
     setGiftDraft({ ...emptyGiftDraft });
-    setIsGiftIssueFormOpen(false);
   };
 
   const removeGiftLine = async (index) => {
@@ -1553,7 +1692,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             ...(Number.isFinite(attendeeId) && attendeeId > 0 ? { meetingAttendeeId: attendeeId } : {}),
             giftItem: gift.giftItem,
             quantity: Number(gift.quantity || 1),
-            remarks: gift.remarks,
           };
         }),
       });
@@ -1619,14 +1757,22 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         companyAmount,
         dealerAmount,
         expenseDate: expenseDraft.expenseDate || todayString(),
-        remarks: expenseDraft.remarks,
       },
     ]);
     setExpenseDraft({
       ...emptyExpenseDraft,
       expenseDate: expenseDraft.expenseDate || todayString(),
     });
-    setIsExpenseLineFormOpen(false);
+  };
+
+  const recordPlannedExpense = (plannedExpense) => {
+    setExpenseDraft({
+      ...emptyExpenseDraft,
+      expenseHead: plannedExpense.expenseHead || '',
+      amount: String(plannedExpense.amount || ''),
+      expenseDate: executionDraft.actualMeetingDate || todayString(),
+    });
+    setIsExpenseLineFormOpen(true);
   };
 
   const removeExpenseLine = async (index) => {
@@ -1651,25 +1797,23 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   };
 
   const submitExpenses = async () => {
-    if (expenseLines.length === 0) {
+    if (actualExpenseLines.length === 0) {
       Alert.alert('Expenses required', 'Add at least one expense line before submitting.');
-      return;
-    }
-
-    if (expensesExceedBudget && !expenseRemarks.trim()) {
-      Alert.alert('Remarks required', 'Actual expense is higher than approved budget. Add remarks before submitting.');
       return;
     }
 
     try {
       setIsSaving(true);
+      const expenseSubmissionRemarks = expensesExceedBudget
+        ? 'Actual expenses exceed the approved budget.'
+        : undefined;
       await submitMeetingExpenses({
         authToken,
         meetingId,
         payload: {
-          remarks: expenseRemarks,
-          expenseVarianceRemarks: expenseRemarks,
-          expenses: expenseLines.map((expense) => ({
+          remarks: expenseSubmissionRemarks,
+          expenseVarianceRemarks: expenseSubmissionRemarks,
+          expenses: actualExpenseLines.map((expense) => ({
             ...(getExpenseLineId(expense) ? { id: getExpenseLineId(expense), expenseId: getExpenseLineId(expense) } : {}),
             expenseHead: expense.expenseHead,
             amount: Number(expense.amount || 0),
@@ -1677,7 +1821,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             companyAmount: Number(expense.companyAmount || 0),
             dealerAmount: Number(expense.dealerAmount || 0),
             expenseDate: expense.expenseDate || todayString(),
-            remarks: expense.remarks,
           })),
         },
       });
@@ -1695,7 +1838,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const submitNoExpenses = async () => {
     try {
       setIsSaving(true);
-      await markNoExpenses({ authToken, meetingId, remarks: expenseRemarks || 'No expenses submitted from mobile' });
+      await markNoExpenses({ authToken, meetingId, remarks: 'No expenses submitted from mobile' });
       Alert.alert('Submitted', 'Marked as no expenses.');
       await fetchMeeting();
       setIsExpenseLineFormOpen(false);
@@ -1867,7 +2010,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               </View>
             </View>
             <View style={styles.halfField}>
-              <MeetingTimePicker label="Time" value={requestDraft.meetingTime} onChange={(value) => updateRequest('meetingTime', value)} required />
+              <MeetingTimePicker label="Time" value={requestDraft.meetingTime} onChange={(value) => updateRequest('meetingTime', value)} required compact />
             </View>
           </View>
           <View style={styles.twoColumn}>
@@ -1913,11 +2056,8 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             </TouchableOpacity>
           </View>
           <Field label="Additional Customer Reference" value={requestDraft.referenceName} onChangeText={(value) => updateRequest('referenceName', value)} placeholder="Optional extra context" />
-          <Field label="Purpose / Objective" value={requestDraft.purpose} onChangeText={(value) => updateRequest('purpose', value)} placeholder="Purpose" multiline required />
-          <Field label="Expected Business Impact" value={requestDraft.expectedBusinessImpact} onChangeText={(value) => updateRequest('expectedBusinessImpact', value)} placeholder="Expected business result" multiline required />
-          <Field label="Expected Turnout" value={requestDraft.expectedTurnout} onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))} placeholder="Planned total attendees" keyboardType="numeric" required />
+          <Field label="Expected People" value={requestDraft.expectedTurnout} onChangeText={(value) => updateRequest('expectedTurnout', value.replace(/\D/g, ''))} placeholder="Expected people count" keyboardType="numeric" required />
           <Field label="Expected Budget" value={requestDraft.expectedBudget} onChangeText={(value) => updateRequest('expectedBudget', value)} placeholder="Amount" keyboardType="numeric" required />
-          <Field label="Gift / Material Notes" value={requestDraft.expectedMaterials} onChangeText={(value) => updateRequest('expectedMaterials', value)} placeholder="Optional notes, e.g. brochures or samples to carry" multiline />
           <View style={styles.planCard}>
             <View style={styles.planCardHeader}>
               <View>
@@ -1948,13 +2088,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 />
               </View>
             </View>
-            <Field
-              label="Budget Remarks"
-              value={requestDraft.budgetRemarks}
-              onChangeText={(value) => updateRequest('budgetRemarks', value)}
-              placeholder="Contribution notes"
-              multiline
-            />
           </View>
 
           <View style={styles.planCard}>
@@ -1991,7 +2124,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 />
                 <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedExpense}>
                   <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
-                  <Text style={styles.secondaryButtonText}>Save Planned Expense</Text>
+                  <Text style={styles.secondaryButtonText}>Add Planned Expense</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -2063,7 +2196,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                 </View>
                 <TouchableOpacity style={styles.secondaryButton} onPress={addPlannedGift}>
                   <Ionicons name="checkmark-circle-outline" size={18} color="#4F46E5" />
-                  <Text style={styles.secondaryButtonText}>Save Planned Gift</Text>
+                  <Text style={styles.secondaryButtonText}>Add Planned Gift</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -2086,7 +2219,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               </View>
             ))}
           </View>
-          <Field label="Remarks" value={requestDraft.remarks} onChangeText={(value) => updateRequest('remarks', value)} placeholder="Remarks" multiline />
           <PrimaryButton label="Save Draft Changes" onPress={saveMeeting} />
           <PrimaryButton
             label={status === MEETING_STATUSES.CORRECTION_REQUIRED ? 'Resubmit Correction' : 'Submit For Approval'}
@@ -2131,19 +2263,16 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           </View>
 
           <View style={styles.detailGroupCard}>
-            <Text style={styles.groupCardTitle}>Meeting Objectives</Text>
+            <Text style={styles.groupCardTitle}>Meeting References</Text>
             <InfoRow label="Dealer / Shop" value={request.storeName || 'No dealer/shop linked'} icon="storefront-outline" />
             <InfoRow label="Reference Name" value={request.referenceName || 'No reference added'} icon="person-circle-outline" />
-            <InfoRow label="Purpose / Objective" value={request.purpose || 'No purpose added'} icon="flag-outline" />
-            <InfoRow label="Expected Business Impact" value={request.expectedBusinessImpact || 'No expected impact added'} icon="trending-up-outline" />
           </View>
 
           <View style={styles.detailGroupCard}>
             <Text style={styles.groupCardTitle}>Resources & Budget</Text>
-            <InfoRow label="Expected Turnout" value={`${request.expectedTurnout || 0}`} icon="people-outline" />
+            <InfoRow label="Expected People" value={`${request.expectedTurnout || 0}`} icon="people-outline" />
             <InfoRow label="Named Attendees Added" value={`${expectedAttendees.length}`} icon="person-add-outline" />
             <InfoRow label="Expected Budget" value={`Rs. ${request.expectedBudget || 0}`} icon="wallet-outline" />
-            <InfoRow label="Gift / Material Notes" value={request.expectedMaterials || 'No extra notes'} icon="document-text-outline" />
             <View style={styles.infoBlock}>
               <View style={styles.infoIcon}>
                 <Ionicons name="gift-outline" size={16} color="#4F46E5" />
@@ -2169,12 +2298,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             </View>
           </View>
 
-          {request.remarks ? (
-            <View style={styles.detailGroupCard}>
-              <Text style={styles.groupCardTitle}>Remarks & Notes</Text>
-              <InfoRow label="Additional Remarks" value={request.remarks} icon="chatbox-ellipses-outline" />
-            </View>
-          ) : null}
         </>
       )}
       {canCancelMeeting ? (
@@ -2220,12 +2343,12 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               <Text style={[styles.categoryPillText, { color: catStyle.text }]}>{attendee.category || 'Attendee'}</Text>
             </View>
           </View>
-          
+
           <View style={styles.metaRow}>
             <Ionicons name="call-outline" size={13} color="#64748B" style={styles.metaIcon} />
             <Text style={styles.listCardMeta}>{attendee.mobile || 'Mobile not added'}</Text>
           </View>
-          
+
           {(attendee.cityArea || attendee.company) ? (
             <View style={styles.metaRow}>
               <Ionicons name="location-outline" size={13} color="#64748B" style={styles.metaIcon} />
@@ -2293,13 +2416,31 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
   const renderAttendeesTab = () => (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>Named Expected Attendees ({attendeeCount}) <Text style={styles.requiredStar}>*</Text></Text>
-      <Text style={styles.helperText}>Expected turnout: {expectedTurnoutValue || 0}</Text>
+      <Text style={styles.helperText}>
+        Expected People: {expectedTurnoutValue || 0}{'\n'}
+        Add named attendees separately; mobile numbers must stay unique.
+      </Text>
       {isEditable && (
         <>
           <TouchableOpacity style={styles.existingButton} onPress={openAttendeePicker}>
             <Ionicons name="search-outline" size={18} color="#4F46E5" />
             <Text style={styles.existingButtonText}>Select Existing Attendee</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.addInlineButton, isImportingAttendees && styles.buttonDisabled]}
+            onPress={importExpectedAttendeesFromFile}
+            disabled={isImportingAttendees}
+          >
+            {isImportingAttendees ? (
+              <ActivityIndicator size="small" color="#4F46E5" />
+            ) : (
+              <Ionicons name="cloud-upload-outline" size={18} color="#4F46E5" />
+            )}
+            <Text style={styles.addInlineButtonText}>
+              {isImportingAttendees ? 'Importing CSV...' : 'Import Attendees CSV'}
+            </Text>
+          </TouchableOpacity>
+          {/* Manual attendee entry is temporarily disabled while CSV import is the preferred flow.
           {isExpectedAttendeeFormOpen ? (
             <View style={styles.inlineFormCard}>
               <View style={styles.inlineFormHeader}>
@@ -2325,6 +2466,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
               <Text style={styles.addInlineButtonText}>Add New Attendee</Text>
             </TouchableOpacity>
           )}
+          */}
         </>
       )}
       {expectedAttendees.length === 0 ? (
@@ -2458,6 +2600,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                       value={executionDraft.actualMeetingTime}
                       onChange={(value) => updateExecution('actualMeetingTime', value)}
                       required
+                      compact
                     />
                   </View>
                 </View>
@@ -2494,7 +2637,7 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             <View style={styles.executionStatsRow}>
               <View style={styles.executionStatCard}>
                 <Text style={styles.executionStatValue}>{expectedTurnoutValue || expectedAttendees.length}</Text>
-                <Text style={styles.executionStatLabel}>Turnout</Text>
+                <Text style={styles.executionStatLabel}>Expected People</Text>
               </View>
               <View style={styles.executionStatCard}>
                 <Text style={styles.executionStatValue}>{attendedCount}</Text>
@@ -2732,12 +2875,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
                   keyboardType="numeric"
                   required
                 />
-                <Field
-                  label="Remarks"
-                  value={giftDraft.remarks}
-                  onChangeText={(value) => updateGiftDraft('remarks', value)}
-                  placeholder="Optional remarks"
-                />
                 <TouchableOpacity style={styles.addWalkInButton} onPress={addGiftLine}>
                   <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
                   <Text style={styles.addWalkInText}>Add Gift Issue</Text>
@@ -2850,87 +2987,132 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           </View>
         </View>
 
+        {plannedExpenseRecords.length > 0 ? (
+          <View style={styles.detailGroupCard}>
+            <Text style={styles.groupCardTitle}>Planned Expense Utilisation</Text>
+            <Text style={styles.helperText}>Record an actual amount for each planned expense that was used.</Text>
+            {plannedExpenseRecords.map(({ item, sourceIndex }) => {
+              const isRecorded = recordedPlannedExpenseIndexes.has(sourceIndex);
+              const canRecord = canSubmitActualExpenses && !isRecorded;
+
+              return (
+                <View key={item.id || `${item.expenseHead}-${sourceIndex}`} style={styles.planLine}>
+                  <View style={styles.planLineMain}>
+                    <Text style={styles.planLineTitle}>{item.expenseHead}</Text>
+                    <Text style={styles.planLineMeta}>Planned Rs. {item.amount}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.plannedExpenseAction,
+                      isRecorded && styles.plannedExpenseActionRecorded,
+                      !canRecord && !isRecorded && styles.plannedExpenseActionDisabled,
+                    ]}
+                    onPress={() => recordPlannedExpense(item)}
+                    disabled={!canRecord}
+                  >
+                    <Ionicons
+                      name={isRecorded ? 'checkmark-circle' : 'add-circle-outline'}
+                      size={15}
+                      color={isRecorded ? '#047857' : canRecord ? '#4F46E5' : '#94A3B8'}
+                    />
+                    <Text style={[
+                      styles.plannedExpenseActionText,
+                      isRecorded && styles.plannedExpenseActionTextRecorded,
+                      !canRecord && !isRecorded && styles.plannedExpenseActionTextDisabled,
+                    ]}>
+                      {isRecorded ? 'Recorded' : canRecord ? 'Record actual' : 'Not recorded'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+
+        {issuedGiftExpense.amount > 0 ? (
+          <View style={styles.giftExpenseNotice}>
+            <Ionicons name="gift-outline" size={18} color="#7C3AED" />
+            <Text style={styles.giftExpenseNoticeText}>
+              Issued gifts are included in Actual Expenses: Rs. {issuedGiftExpense.amount} for {issuedGiftExpense.quantity} item(s).
+            </Text>
+          </View>
+        ) : null}
+
         {canSubmitActualExpenses ? (
           isExpenseLineFormOpen ? (
-          <View style={styles.inlineFormCard}>
-            <View style={styles.inlineFormHeader}>
-              <Text style={styles.inlineFormTitle}>Add Expense Line</Text>
-              <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsExpenseLineFormOpen(false)}>
-                <Ionicons name="close" size={18} color="#64748B" />
-              </TouchableOpacity>
-            </View>
-            <SelectField
-              label="Expense Head"
-              placeholder="Select expense head"
-              options={expenseHeadOptions}
-              value={expenseDraft.expenseHead}
-              onSelect={(value) => updateExpenseDraft('expenseHead', value)}
-              required
-            />
-            <Field
-              label="Amount"
-              value={expenseDraft.amount}
-              onChangeText={(value) => updateExpenseDraft('amount', value.replace(/[^\d.]/g, ''))}
-              placeholder="Amount"
-              keyboardType="numeric"
-              required
-            />
-            <SelectField
-              label="Paid By"
-              placeholder="Select payer"
-              options={['COMPANY', 'DEALER', 'SHARED']}
-              value={expenseDraft.paidBy}
-              onSelect={(value) => updateExpenseDraft('paidBy', value)}
-              required
-            />
-            {expenseDraft.paidBy === 'SHARED' ? (
-              <View style={styles.twoColumn}>
-                <View style={styles.halfField}>
-                  <Field
-                    label="Company Amount"
-                    value={expenseDraft.companyAmount}
-                    onChangeText={(value) => updateExpenseDraft('companyAmount', value.replace(/[^\d.]/g, ''))}
-                    placeholder="Company"
-                    keyboardType="numeric"
-                    required
-                  />
-                </View>
-                <View style={styles.halfField}>
-                  <Field
-                    label="Dealer Amount"
-                    value={expenseDraft.dealerAmount}
-                    onChangeText={(value) => updateExpenseDraft('dealerAmount', value.replace(/[^\d.]/g, ''))}
-                    placeholder="Dealer"
-                    keyboardType="numeric"
-                    required
-                  />
-                </View>
+            <View style={styles.inlineFormCard}>
+              <View style={styles.inlineFormHeader}>
+                <Text style={styles.inlineFormTitle}>Add Expense Line</Text>
+                <TouchableOpacity style={styles.inlineCloseButton} onPress={() => setIsExpenseLineFormOpen(false)}>
+                  <Ionicons name="close" size={18} color="#64748B" />
+                </TouchableOpacity>
               </View>
-            ) : null}
-            <View style={styles.field}>
-              <FieldLabel label="Expense Date" required />
-              <TouchableOpacity
-                style={styles.dateSelectField}
-                onPress={() => setIsExpenseDatePickerOpen(true)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.selectValue, !expenseDraft.expenseDate && styles.selectPlaceholder]} numberOfLines={1}>
-                  {expenseDraft.expenseDate || 'Select date'}
-                </Text>
-                <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+              <SelectField
+                label="Expense Head"
+                placeholder="Select expense head"
+                options={expenseHeadOptions}
+                value={expenseDraft.expenseHead}
+                onSelect={(value) => updateExpenseDraft('expenseHead', value)}
+                required
+              />
+              <Field
+                label="Amount"
+                value={expenseDraft.amount}
+                onChangeText={(value) => updateExpenseDraft('amount', value.replace(/[^\d.]/g, ''))}
+                placeholder="Amount"
+                keyboardType="numeric"
+                required
+              />
+              <SelectField
+                label="Paid By"
+                placeholder="Select payer"
+                options={['COMPANY', 'DEALER', 'SHARED']}
+                value={expenseDraft.paidBy}
+                onSelect={(value) => updateExpenseDraft('paidBy', value)}
+                required
+              />
+              {expenseDraft.paidBy === 'SHARED' ? (
+                <View style={styles.twoColumn}>
+                  <View style={styles.halfField}>
+                    <Field
+                      label="Company Amount"
+                      value={expenseDraft.companyAmount}
+                      onChangeText={(value) => updateExpenseDraft('companyAmount', value.replace(/[^\d.]/g, ''))}
+                      placeholder="Company"
+                      keyboardType="numeric"
+                      required
+                    />
+                  </View>
+                  <View style={styles.halfField}>
+                    <Field
+                      label="Dealer Amount"
+                      value={expenseDraft.dealerAmount}
+                      onChangeText={(value) => updateExpenseDraft('dealerAmount', value.replace(/[^\d.]/g, ''))}
+                      placeholder="Dealer"
+                      keyboardType="numeric"
+                      required
+                    />
+                  </View>
+                </View>
+              ) : null}
+              <View style={styles.field}>
+                <FieldLabel label="Expense Date" required />
+                <TouchableOpacity
+                  style={styles.dateSelectField}
+                  onPress={() => setIsExpenseDatePickerOpen(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.selectValue, !expenseDraft.expenseDate && styles.selectPlaceholder]} numberOfLines={1}>
+                    {expenseDraft.expenseDate || 'Select date'}
+                  </Text>
+                  <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={styles.addWalkInButton} onPress={addExpenseLine}>
+                <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
+                <Text style={styles.addWalkInText}>Add Expense Line</Text>
               </TouchableOpacity>
             </View>
-            <Field
-              label="Remarks"
-              value={expenseDraft.remarks}
-              onChangeText={(value) => updateExpenseDraft('remarks', value)}
-              placeholder="Optional line remarks"
-            />
-            <TouchableOpacity style={styles.addWalkInButton} onPress={addExpenseLine}>
-              <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
-              <Text style={styles.addWalkInText}>Add Expense Line</Text>
-            </TouchableOpacity>
-          </View>
           ) : (
             <TouchableOpacity style={styles.addInlineButton} onPress={() => setIsExpenseLineFormOpen(true)}>
               <Ionicons name="add-circle-outline" size={18} color="#4F46E5" />
@@ -2944,60 +3126,45 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
             <Text style={styles.groupCardTitle}>Expense Summary</Text>
             <Text style={styles.executionCountText}>Rs. {expenseTotal}</Text>
           </View>
-          {expenseLines.length === 0 && noExpensesMarked ? (
+          {actualExpenseLines.length === 0 && noExpensesMarked ? (
             <Text style={styles.emptyText}>No expense lines were added because this meeting was marked as no expenses.</Text>
-          ) : expenseLines.length === 0 ? (
+          ) : actualExpenseLines.length === 0 ? (
             <Text style={styles.emptyText}>No expenses added yet.</Text>
           ) : (
-            expenseLines.map((expense, index) => (
-              <View key={`${expense.expenseHead}-${index}`} style={styles.summaryLine}>
-                <View style={styles.summaryLineIcon}>
-                  <Ionicons name="receipt-outline" size={16} color="#0891B2" />
+            actualExpenseLines.map((expense, index) => {
+              const isCalculatedGiftExpense = Boolean(expense.isCalculatedGiftExpense || expense.remarks === AUTO_GIFT_EXPENSE_REMARKS);
+
+              return (
+                <View key={`${expense.expenseHead}-${index}`} style={styles.summaryLine}>
+                  <View style={styles.summaryLineIcon}>
+                    <Ionicons name={isCalculatedGiftExpense ? 'gift-outline' : 'receipt-outline'} size={16} color={isCalculatedGiftExpense ? '#7C3AED' : '#0891B2'} />
+                  </View>
+                  <View style={styles.summaryLineText}>
+                    <Text style={styles.summaryLineTitle}>{isCalculatedGiftExpense ? 'Gift materials' : expense.expenseHead} - Rs. {expense.amount}</Text>
+                    <Text style={styles.summaryLineMeta}>
+                      {isCalculatedGiftExpense
+                        ? 'Calculated from issued gifts and planned cost'
+                        : `${expense.expenseDate || todayString()} - ${expense.paidBy || 'COMPANY'}${expense.paidBy === 'SHARED' ? ` (Company Rs. ${expense.companyAmount}, Dealer Rs. ${expense.dealerAmount})` : ''}`}
+                    </Text>
+                  </View>
+                  {canSubmitActualExpenses && !isCalculatedGiftExpense ? (
+                    <TouchableOpacity onPress={() => removeExpenseLine(index)}>
+                      <Ionicons name="close-circle" size={20} color="#EF4444" />
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
-                <View style={styles.summaryLineText}>
-                  <Text style={styles.summaryLineTitle}>{expense.expenseHead} - Rs. {expense.amount}</Text>
-                  <Text style={styles.summaryLineMeta}>
-                    {expense.expenseDate || todayString()} - {expense.paidBy || 'COMPANY'}
-                    {expense.paidBy === 'SHARED' ? ` (Company Rs. ${expense.companyAmount}, Dealer Rs. ${expense.dealerAmount})` : ''}
-                    {expense.remarks ? ` - ${expense.remarks}` : ''}
-                  </Text>
-                </View>
-                {canSubmitActualExpenses ? (
-                  <TouchableOpacity onPress={() => removeExpenseLine(index)}>
-                    <Ionicons name="close-circle" size={20} color="#EF4444" />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            ))
+              );
+            })
           )}
         </View>
 
-        {expensesExceedBudget ? (
-          <Field
-            label="Over Budget Remarks"
-            value={expenseRemarks}
-            onChangeText={setExpenseRemarks}
-            placeholder="Required because actual expense is higher"
-            multiline
-            required
-          />
-        ) : (
-          <Field
-            label="Expense Remarks"
-            value={expenseRemarks}
-            onChangeText={setExpenseRemarks}
-            placeholder="Optional remarks"
-            multiline
-          />
-        )}
-
-        {canSubmitActualExpenses && expenseLines.length === 0 && !noExpensesMarked ? (
+        {canSubmitActualExpenses && actualExpenseLines.length === 0 && !noExpensesMarked ? (
           <TouchableOpacity style={styles.noWorkButton} onPress={submitNoExpenses} disabled={isSaving}>
             <Ionicons name="ban-outline" size={18} color="#0891B2" />
             <Text style={styles.noWorkButtonText}>Mark No Expenses</Text>
           </TouchableOpacity>
         ) : null}
-        {canSubmitActualExpenses && expenseLines.length > 0 ? <PrimaryButton label="Submit Expenses" onPress={submitExpenses} color="#0891B2" /> : null}
+        {canSubmitActualExpenses && actualExpenseLines.length > 0 ? <PrimaryButton label="Submit Expenses" onPress={submitExpenses} color="#0891B2" /> : null}
         <DatePicker
           isVisible={isExpenseDatePickerOpen}
           onClose={() => setIsExpenseDatePickerOpen(false)}
@@ -3081,7 +3248,6 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
           <Field label="Key Discussion Points" value={reportDraft.keyDiscussionPoints} onChangeText={(value) => updateReportDraft('keyDiscussionPoints', value)} placeholder="Pricing, availability, objections, etc." multiline editable={canSubmitReport} />
           <Field label="Competitor Information" value={reportDraft.competitorInformation} onChangeText={(value) => updateReportDraft('competitorInformation', value)} placeholder="Optional competitor notes" multiline editable={canSubmitReport} />
           <Field label="Actual Business Outcome" value={reportDraft.actualBusinessOutcome} onChangeText={(value) => updateReportDraft('actualBusinessOutcome', value)} placeholder="Actual result from this meeting" multiline editable={canSubmitReport} required />
-          <Field label="Final Remarks" value={reportDraft.finalRemarks} onChangeText={(value) => updateReportDraft('finalRemarks', value)} placeholder="Final remarks" multiline editable={canSubmitReport} />
         </View>
 
         <View style={styles.detailGroupCard}>
@@ -3199,6 +3365,64 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
     return renderFinalReportTab();
   };
 
+  const isMeetingTabAvailable = (tabKey) => {
+    if (tabKey === 'finalReport') return isFinalReportAvailable();
+    if (tabKey === 'gifts') return isGiftsAvailable();
+    return isWorkflowTabAvailable(tabKey);
+  };
+
+  const renderTabRail = () => (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      style={styles.tabRail}
+      contentContainerStyle={styles.tabRailContent}
+    >
+      {tabs.map((tab) => {
+        const isActive = activeTab === tab.key;
+        const isAvailable = isMeetingTabAvailable(tab.key);
+        const iconColor = !isAvailable ? '#94A3B8' : isActive ? '#4F46E5' : '#64748B';
+
+        return (
+          <TouchableOpacity
+            key={tab.key}
+            style={[
+              styles.railTabButton,
+              isActive && styles.railTabButtonActive,
+              !isAvailable && styles.railTabButtonLocked,
+            ]}
+            onPress={() => {
+              if (!isAvailable) {
+                Alert.alert('Locked', `${tab.label} is not available for the current meeting status.`);
+                return;
+              }
+              setActiveTab(tab.key);
+            }}
+          >
+            {isActive ? <View style={styles.railTabAccent} /> : null}
+            <View style={[styles.railTabIcon, isActive && styles.railTabIconActive]}>
+              <Ionicons
+                name={isAvailable ? tab.icon : 'lock-closed-outline'}
+                size={18}
+                color={iconColor}
+              />
+            </View>
+            <Text
+              style={[
+                styles.railTabText,
+                isActive && styles.railTabTextActive,
+                !isAvailable && styles.railTabTextLocked,
+              ]}
+              numberOfLines={2}
+            >
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -3245,67 +3469,31 @@ const MeetingDetail = ({ route, authToken: propAuthToken }) => {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        style={styles.tabBar}
-        contentContainerStyle={styles.tabBarContent}
-      >
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.key;
-          const isAvailable = tab.key === 'finalReport'
-            ? isFinalReportAvailable()
-            : tab.key === 'gifts'
-              ? isGiftsAvailable()
-              : isWorkflowTabAvailable(tab.key);
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={[
-                styles.tabButton,
-                isActive && styles.tabButtonActive,
-                !isAvailable && styles.tabButtonLocked,
-              ]}
-              onPress={() => {
-                if (!isAvailable) {
-                  Alert.alert('Locked', `${tab.label} is not available for the current meeting status.`);
-                  return;
-                }
-                setActiveTab(tab.key);
-              }}
-            >
-              <Ionicons
-                name={isAvailable ? tab.icon : 'lock-closed-outline'}
-                size={16}
-                color={isActive ? '#4F46E5' : '#64748B'}
-              />
-              <Text style={[styles.tabText, isActive && styles.tabTextActive, !isAvailable && styles.tabTextLocked]}>{tab.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="none"
-      >
-        {isCorrectionRequired && activeTab !== 'request' ? (
-          <View style={styles.correctionPanel}>
-            <View style={styles.correctionIcon}>
-              <Ionicons name="construct-outline" size={20} color="#EA580C" />
-            </View>
-            <View style={styles.correctionTextWrap}>
-              <Text style={styles.correctionTitle}>Correction Required{meeting?.correctionStage ? ` - ${meeting.correctionStage}` : ''}</Text>
-              <Text style={styles.correctionText}>{meeting?.correctionRemarks || 'Please update the requested section and resubmit.'}</Text>
-              <Text style={styles.correctionMeta}>Affected section: {correctionSectionLabel}</Text>
-            </View>
-          </View>
-        ) : null}
-        {renderActiveTab()}
-      </ScrollView>
+      <View style={styles.detailLayout}>
+        {renderTabRail()}
+        <View style={styles.tabContentPane}>
+          <ScrollView
+            style={styles.container}
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="none"
+          >
+            {isCorrectionRequired && activeTab !== 'request' ? (
+              <View style={styles.correctionPanel}>
+                <View style={styles.correctionIcon}>
+                  <Ionicons name="construct-outline" size={20} color="#EA580C" />
+                </View>
+                <View style={styles.correctionTextWrap}>
+                  <Text style={styles.correctionTitle}>Correction Required{meeting?.correctionStage ? ` - ${meeting.correctionStage}` : ''}</Text>
+                  <Text style={styles.correctionText}>{meeting?.correctionRemarks || 'Please update the requested section and resubmit.'}</Text>
+                  <Text style={styles.correctionMeta}>Affected section: {correctionSectionLabel}</Text>
+                </View>
+              </View>
+            ) : null}
+            {renderActiveTab()}
+          </ScrollView>
+        </View>
+      </View>
     </SafeAreaView>
   );
 };
@@ -3354,56 +3542,95 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
-  tabBar: {
+  detailLayout: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: '#F8FAFC',
+  },
+  tabRail: {
+    width: 52,
+    minWidth: 52,
+    maxWidth: 52,
     backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    height: 64,
+    borderRightWidth: 1,
+    borderRightColor: '#E5E7EB',
     flexGrow: 0,
     flexShrink: 0,
+    marginRight: 4,
   },
-  tabBarContent: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  tabRailContent: {
+    paddingHorizontal: 3,
+    paddingVertical: 5,
     alignItems: 'center',
   },
-  tabButton: {
-    minWidth: 98,
-    height: 40,
-    flexDirection: 'row',
+  railTabButton: {
+    width: 46,
+    minHeight: 54,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: '#F1F5F9',
-    marginHorizontal: 4,
+    paddingHorizontal: 2,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
+    marginBottom: 4,
     borderWidth: 1,
     borderColor: 'transparent',
+    position: 'relative',
   },
-  tabButtonActive: {
+  railTabButtonActive: {
     backgroundColor: '#EEF2FF',
     borderColor: '#C7D2FE',
   },
-  tabButtonLocked: {
+  railTabButtonLocked: {
     opacity: 0.58,
   },
-  tabText: {
-    marginLeft: 6,
-    color: '#64748B',
-    fontWeight: '700',
-    fontSize: 12,
+  railTabAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 7,
+    bottom: 7,
+    width: 3,
+    borderTopRightRadius: 3,
+    borderBottomRightRadius: 3,
+    backgroundColor: '#4F46E5',
   },
-  tabTextActive: {
+  railTabIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+    marginBottom: 2,
+  },
+  railTabIconActive: {
+    backgroundColor: '#FFFFFF',
+  },
+  railTabText: {
+    color: '#64748B',
+    fontWeight: '800',
+    fontSize: 8,
+    lineHeight: 10,
+    textAlign: 'center',
+  },
+  railTabTextActive: {
     color: '#4F46E5',
   },
-  tabTextLocked: {
+  railTabTextLocked: {
     color: '#94A3B8',
   },
   container: {
     flex: 1,
   },
+  tabContentPane: {
+    flex: 1,
+    flexBasis: 0,
+    flexShrink: 1,
+    minWidth: 0,
+  },
   content: {
-    padding: 16,
+    flexGrow: 1,
+    padding: 8,
     paddingBottom: 80,
   },
   section: {
@@ -3590,6 +3817,37 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     marginTop: 3,
   },
+  plannedExpenseAction: {
+    minHeight: 30,
+    paddingHorizontal: 9,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  plannedExpenseActionRecorded: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#BBF7D0',
+  },
+  plannedExpenseActionDisabled: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+  },
+  plannedExpenseActionText: {
+    color: '#4F46E5',
+    fontSize: 11.5,
+    fontWeight: '900',
+    marginLeft: 4,
+  },
+  plannedExpenseActionTextRecorded: {
+    color: '#047857',
+  },
+  plannedExpenseActionTextDisabled: {
+    color: '#94A3B8',
+  },
   planDeleteButton: {
     width: 32,
     height: 32,
@@ -3625,6 +3883,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
     marginBottom: 12,
+  },
+  buttonDisabled: {
+    opacity: 0.65,
   },
   addInlineButtonText: {
     marginLeft: 8,
@@ -4500,6 +4761,26 @@ const styles = StyleSheet.create({
   savedStateText: {
     flex: 1,
     color: '#047857',
+    fontSize: 12.5,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginLeft: 8,
+  },
+  giftExpenseNotice: {
+    minHeight: 44,
+    borderRadius: 10,
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  giftExpenseNoticeText: {
+    flex: 1,
+    color: '#5B21B6',
     fontSize: 12.5,
     fontWeight: '800',
     lineHeight: 17,

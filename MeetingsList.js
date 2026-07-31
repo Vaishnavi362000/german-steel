@@ -74,6 +74,18 @@ const formatCardTime = (time) => {
   return parsed.isValid() ? parsed.format('hh:mm A') : String(time);
 };
 
+const getMeetingDateTimeValue = (meeting) => {
+  const request = getRequest(meeting);
+  const value = [request.meetingDate, request.meetingTime].filter(Boolean).join(' ').trim();
+  const parsed = moment(value, [
+    'YYYY-MM-DD HH:mm:ss',
+    'YYYY-MM-DD HH:mm',
+    moment.ISO_8601,
+  ], true);
+
+  return parsed.isValid() ? parsed.valueOf() : null;
+};
+
 const isAttendeePresent = (attendee = {}) => Boolean(attendee.present || attendee.attended || attendee.actualAttendance);
 const getAttendeeName = (attendee = {}) => attendee.name
   || attendee.attendeeName
@@ -173,7 +185,6 @@ const MeetingsList = ({ authToken }) => {
             request.state,
             request.location,
             request.referenceName,
-            request.purpose,
             meeting.creatorName,
           ]
             .filter(Boolean)
@@ -184,9 +195,14 @@ const MeetingsList = ({ authToken }) => {
     return visible
       .filter((meeting) => getMeetingGroup(meeting) === activeFilter)
       .sort((a, b) => {
-        const aDate = `${getRequest(a).meetingDate || ''} ${getRequest(a).meetingTime || ''}`;
-        const bDate = `${getRequest(b).meetingDate || ''} ${getRequest(b).meetingTime || ''}`;
-        return activeFilter === 'completed' ? bDate.localeCompare(aDate) : aDate.localeCompare(bDate);
+        const aDateTime = getMeetingDateTimeValue(a);
+        const bDateTime = getMeetingDateTimeValue(b);
+
+        if (aDateTime === null) return bDateTime === null ? 0 : 1;
+        if (bDateTime === null) return -1;
+
+        const difference = aDateTime - bDateTime;
+        return activeFilter === 'completed' ? -difference : difference;
       });
   }, [activeFilter, meetings, searchText]);
 
@@ -281,17 +297,19 @@ const MeetingsList = ({ authToken }) => {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Meetings</Text>
-        <TouchableOpacity
-          style={styles.monthFilterButton}
-          onPress={() => {
-            setOpenFilterDropdown(null);
-            setIsFilterOpen(true);
-          }}
-        >
-          <Ionicons name="filter-outline" size={16} color="#4F46E5" />
-          <Text style={styles.monthFilterText}>{moment({ month: selectedMonth }).format('MMM')} {selectedYear}</Text>
-          <Ionicons name="chevron-down" size={14} color="#64748B" />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.monthFilterButton}
+            onPress={() => {
+              setOpenFilterDropdown(null);
+              setIsFilterOpen(true);
+            }}
+          >
+            <Ionicons name="filter-outline" size={16} color="#4F46E5" />
+            <Text style={styles.monthFilterText}>{moment({ month: selectedMonth }).format('MMM')} {selectedYear}</Text>
+            <Ionicons name="chevron-down" size={14} color="#64748B" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.scopeTabs}>
@@ -322,7 +340,7 @@ const MeetingsList = ({ authToken }) => {
           style={styles.searchInput}
           value={searchText}
           onChangeText={setSearchText}
-          placeholder="Search by city, reference, purpose"
+          placeholder="Search by city or reference"
           placeholderTextColor="#9CA3AF"
         />
       </View>
@@ -452,9 +470,15 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E5E7EB',
   },
   headerTitle: {
+    flex: 1,
+    marginRight: 12,
     fontSize: 24,
     fontWeight: '800',
     color: '#111827',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   monthFilterButton: {
     minHeight: 38,
