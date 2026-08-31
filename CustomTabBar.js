@@ -1,18 +1,28 @@
 import React from 'react';
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const TabBarIcon = ({ name, focused }) => {
+  const resolvedName = focused ? name?.replace('-outline', '') : name;
+
   return (
     <View style={styles.iconContainer}>
-      <Ionicons name={name} size={24} color={focused ? "#FFFFFF" : "#FFFFFF"} />
+      <Ionicons
+        name={resolvedName}
+        size={focused ? 21 : 20}
+        color={focused ? '#FFFFFF' : '#D7D5FF'}
+      />
     </View>
   );
 };
 
 const CustomTabBar = ({ state, descriptors, navigation }) => {
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, 6);
+
   return (
-    <View style={styles.tabBar}>
+    <View style={[styles.tabBar, { height: 62 + bottomInset, paddingBottom: bottomInset }]}>
       {state.routes.map((route, index) => {
         const { options } = descriptors[route.key];
         const label =
@@ -38,18 +48,19 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
 
         return (
           <TouchableOpacity
-            key={index}
+            key={route.key}
             accessibilityRole="button"
             accessibilityState={isFocused ? { selected: true } : {}}
             accessibilityLabel={options.tabBarAccessibilityLabel}
             testID={options.tabBarTestID}
             onPress={onPress}
-            style={[styles.tabButton, isFocused && styles.focusedTab]}
+            activeOpacity={0.72}
+            style={styles.tabButton}
           >
-            <TabBarIcon name={options.tabBarIconName} focused={isFocused} />
-            <Text style={[styles.label, isFocused && styles.focusedLabel]}>
-              {label}
-            </Text>
+            <View style={[styles.tabItem, isFocused && styles.focusedTab]}>
+              <TabBarIcon name={options.tabBarIconName} focused={isFocused} />
+              <Text style={[styles.label, isFocused && styles.focusedLabel]}>{label}</Text>
+            </View>
           </TouchableOpacity>
         );
       })}
@@ -60,42 +71,52 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
 const styles = StyleSheet.create({
   tabBar: {
     flexDirection: 'row',
-    height: 70,
-    backgroundColor: '#6C63FF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    alignItems: 'flex-start',
+    backgroundColor: '#625BF5',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingTop: 6,
+    paddingHorizontal: 6,
+    shadowColor: '#2E2A7E',
+    shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-    elevation: 10,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingVertical: 10,
+    shadowRadius: 10,
+    elevation: 12,
   },
   tabButton: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 5,
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  tabItem: {
+    minWidth: 84,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderRadius: 14,
   },
   focusedTab: {
-    backgroundColor: '#5A55D6',
-    borderRadius: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    backgroundColor: 'rgba(43, 38, 145, 0.32)',
   },
   iconContainer: {
+    width: 28,
+    height: 24,
     justifyContent: 'center',
     alignItems: 'center',
   },
   label: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    marginTop: 2,
+    color: '#D7D5FF',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '600',
   },
   focusedLabel: {
-    fontWeight: 'bold',
-    fontSize: 12,
     color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
   },
 });
 

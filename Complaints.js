@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, Image, ActivityIndicator } from 'react-native';
 import axios from 'axios';
@@ -16,7 +17,7 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
 
   const fetchComplaints = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/task/getByVisit?type=complaint&visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/task/getByVisit?type=complaint&visitId=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const filteredComplaints = Array.isArray(response.data)
@@ -48,7 +49,7 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
         status: 'Assigned',
         visitId: visitId
       };
-      const response = await axios.post('https://api.gajkesaristeels.in/task/create', newComplaint, {
+      const response = await axios.post(`${API_BASE_URL}/task/create`, newComplaint, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
 
@@ -83,7 +84,7 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
       });
 
       await axios.put(
-        `https://api.gajkesaristeels.in/task/uploadFile?id=${taskId}&tag=check-in`,
+        `${API_BASE_URL}/task/uploadFile?id=${taskId}&tag=check-in`,
         formData,
         {
           headers: {

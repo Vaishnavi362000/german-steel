@@ -1,7 +1,9 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import NotesSection from './NotesSection';
 import VisitsTimeline from './VisitsTimeline';
 import Sites from './Sites';
@@ -14,15 +16,7 @@ import {
   getMobileActionLocation,
   getMobileLocationErrorContent,
 } from './MobileLocationService';
-
-const clientTypeOptions = [
-  { label: 'Shop', value: 'shop' },
-  { label: 'Site Visit', value: 'site visit' },
-  { label: 'Architect', value: 'architect' },
-  { label: 'Engineer', value: 'engineer' },
-  { label: 'Builder', value: 'builder' },
-  { label: 'Others', value: 'others' },
-];
+import { CLIENT_TYPE_OPTIONS, YEAR_OF_JOINING_OPTIONS } from './clientTypeOptions';
 
 const indianStates = [
   { label: 'Andhra Pradesh', value: 'Andhra Pradesh' },
@@ -116,7 +110,7 @@ function CustomerDetails({ route, navigation }) {
 
   const loadCustomerDetails = useCallback(async () => {
     try {
-      const url = `https://api.gajkesaristeels.in/store/getById?id=${customerId}`;
+      const url = `${API_BASE_URL}/store/getById?id=${customerId}`;
       console.log('Fetch Store Details Request (GET /store/getById):', { url, customerId });
 
       const response = await fetch(url, {
@@ -145,7 +139,7 @@ function CustomerDetails({ route, navigation }) {
 
   const fetchIntentLevel = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/intent-audit/getByStore?id=${customerId}`, {
+      const response = await axios.get(`${API_BASE_URL}/intent-audit/getByStore?id=${customerId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -182,7 +176,7 @@ function CustomerDetails({ route, navigation }) {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       const formattedDate = format(newVisitDetails.date, 'yyyy-MM-dd');
-      const response = await fetch(`https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`, {
+      const response = await fetch(`${API_BASE_URL}/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -217,7 +211,7 @@ function CustomerDetails({ route, navigation }) {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       const purpose = newVisitDetails.purpose === 'Others' ? newVisitDetails.customPurpose : newVisitDetails.purpose;
-      const response = await axios.put('https://api.gajkesaristeels.in/visit/create', {
+      const response = await axios.put(`${API_BASE_URL}/visit/create`, {
         storeId: customerId,
         employeeId: employeeId,
         visit_date: format(newVisitDetails.date, 'yyyy-MM-dd'),
@@ -254,40 +248,106 @@ function CustomerDetails({ route, navigation }) {
 
   const renderCustomerCard = () => {
     const isProfessional = ['architect', 'engineer', 'builder'].includes(customerDetails.clientType?.toLowerCase());
-    
+    const isDealer = ['dealer', 'shop'].some((type) => customerDetails.clientType?.toLowerCase().includes(type));
+    const lastVisit = customerDetails.lastVisitDate || customerDetails.latestVisitDate;
+    const lastVisitText = lastVisit ? format(new Date(lastVisit), 'dd MMM yyyy') : 'Never visited';
+    const totalVisits = customerDetails.totalVisits ?? customerDetails.visitCount ?? customerDetails.totalVisitCount ?? 0;
+    const monthlyVisits = customerDetails.thisMonthVisits ?? customerDetails.visitThisMonth ?? 0;
+
     return (
-        <View style={styles.card}>
-            <View style={styles.cardHeader}>
-                <TouchableOpacity style={[styles.iconBtn, styles.editBtn]} onPress={() => setModalVisible(true)}>
-                    <Ionicons name="create-outline" size={24} color="#fff" />
-                </TouchableOpacity>
-                <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>
-                        {getInitials(`${customerDetails.clientFirstName} ${customerDetails.clientLastName}`)}
-                    </Text>
-                </View>
-                <Text style={styles.customerName}>{customerDetails.storeName}</Text>
-                <View style={[styles.badge, isProfessional && styles.professionalBadge]}>
-                    <Text style={styles.badgeText}>{customerDetails.clientType}</Text>
-                </View>
+      <View style={styles.card}>
+        <View style={styles.customerHeroCard}>
+          <View style={styles.customerHeroMain}>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>
+                {getInitials(customerDetails.storeName || `${customerDetails.clientFirstName} ${customerDetails.clientLastName}`)}
+              </Text>
             </View>
-            <View style={styles.cardBody}>
+            <View style={styles.customerHeroInfo}>
+              <Text style={styles.customerName} numberOfLines={1}>{customerDetails.storeName || 'Customer'}</Text>
+              <View style={styles.badgeContainer}>
+                <View style={[styles.badge, isProfessional && styles.professionalBadge]}>
+                  <Text style={styles.badgeText}>{customerDetails.clientType || 'Customer'}</Text>
+                </View>
+              </View>
+              <View style={styles.ownerRow}>
+                <Ionicons name="person-outline" size={12} color="#E0E7FF" />
+                <Text style={styles.ownerText} numberOfLines={1}>
+                  {[customerDetails.clientFirstName, customerDetails.clientLastName].filter(Boolean).join(' ')}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity style={styles.heroEditButton} onPress={() => setModalVisible(true)}>
+              <Ionicons name="create-outline" size={19} color="#4F46E5" />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.customerHeroDivider} />
+          <View style={styles.customerStatsRow}>
+            <View style={styles.customerStatItem}>
+              <View style={styles.customerStatTop}>
+                <Ionicons name="calendar-outline" size={15} color="#FFFFFF" />
+                <Text style={styles.customerStatValue} numberOfLines={1}>{lastVisitText}</Text>
+              </View>
+              <Text style={styles.customerStatLabel}>Last Visit</Text>
+            </View>
+            <View style={styles.customerStatDivider} />
+            <View style={styles.customerStatItem}>
+              <View style={styles.customerStatTop}>
+                <Ionicons name="analytics-outline" size={15} color="#FFFFFF" />
+                <Text style={styles.customerStatValue}>{totalVisits}</Text>
+              </View>
+              <Text style={styles.customerStatLabel}>Total Visits</Text>
+            </View>
+            <View style={styles.customerStatDivider} />
+            <View style={styles.customerStatItem}>
+              <View style={styles.customerStatTop}>
+                <Ionicons name="calendar-number-outline" size={15} color="#FFFFFF" />
+                <Text style={styles.customerStatValue}>{monthlyVisits}</Text>
+              </View>
+              <Text style={styles.customerStatLabel}>This Month</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.cardBody}>
                 <View style={styles.tabs}>
                     <TouchableOpacity
-                        style={[styles.tabBtn, customerInfoTab === 'contact' && styles.activeTab]}
+                        style={[styles.tabBtn, customerInfoTab === 'contact' && styles.activeInfoTab]}
                         onPress={() => setCustomerInfoTab('contact')}
                     >
                         <Text style={[styles.tabBtnText, customerInfoTab === 'contact' && styles.activeTabText]}>Contact</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.tabBtn, customerInfoTab === 'details' && styles.activeTab]}
+                        style={[styles.tabBtn, customerInfoTab === 'details' && styles.activeInfoTab]}
                         onPress={() => setCustomerInfoTab('details')}
                     >
                         <Text style={[styles.tabBtnText, customerInfoTab === 'details' && styles.activeTabText]}>Details</Text>
                     </TouchableOpacity>
+                    {isDealer && (
+                        <TouchableOpacity
+                            style={[styles.tabBtn, customerInfoTab === 'dealerInfo' && styles.activeInfoTab]}
+                            onPress={() => setCustomerInfoTab('dealerInfo')}
+                        >
+                            <Text style={[styles.tabBtnText, customerInfoTab === 'dealerInfo' && styles.activeTabText]}>Dealer Info</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
                 {customerInfoTab === 'contact' && (
                     <View>
+                        <InfoRow
+                            icon="person-outline"
+                            label="Customer / Owner Name"
+                            value={[customerDetails.clientFirstName, customerDetails.clientLastName].filter(Boolean).join(' ')}
+                        />
+                        <InfoRow
+                            icon="calendar-number-outline"
+                            label="Year of Joining"
+                            value={customerDetails.yearOfJoining ? String(customerDetails.yearOfJoining) : ''}
+                        />
+                        <InfoRow
+                            icon="call-outline"
+                            label="Phone"
+                            value={customerDetails.primaryContact}
+                        />
                         <InfoRow
                             icon="location-outline"
                             label="Location"
@@ -297,11 +357,6 @@ function CustomerDetails({ route, navigation }) {
                             icon="mail-outline"
                             label="Email"
                             value={customerDetails.email}
-                        />
-                        <InfoRow
-                            icon="call-outline"
-                            label="Phone"
-                            value={customerDetails.primaryContact}
                         />
                     </View>
                 )}
@@ -341,6 +396,13 @@ function CustomerDetails({ route, navigation }) {
                         />
                     </View>
                 )}
+                {customerInfoTab === 'dealerInfo' && isDealer && (
+                    <View>
+                        <InfoRow icon="storefront-outline" label="Customer Type" value={customerDetails.clientType} />
+                        <InfoRow icon="cash-outline" label="Monthly Sale" value={customerDetails.monthlySale} />
+                        <InfoRow icon="receipt-outline" label="GST" value={customerDetails.gstNumber} />
+                    </View>
+                )}
             </View>
         </View>
     );
@@ -368,7 +430,7 @@ function CustomerDetails({ route, navigation }) {
     const showSitesTab = allowedClientTypes.includes(clientType);
 
     const tabs = [
-      { id: 'notes', icon: 'document-text-outline', label: 'Notes' },
+      { id: 'notes', icon: 'document-text-outline', label: 'Discussion' },
       { id: 'visits', icon: 'time-outline', label: 'Visits' },
     ];
 
@@ -480,7 +542,9 @@ function CustomerDetails({ route, navigation }) {
         clientType: selectedOption ? (selectedOption.value === 'others' ? customClientType : selectedOption.value) : null,
         customClientType: selectedOption?.value === 'others' ? customClientType : null,
         intent: selectedIntentLevel,
+        yearOfJoining: updatedDetails.yearOfJoining ? Number(updatedDetails.yearOfJoining) : undefined,
       };
+      if (!finalUpdatedDetails.yearOfJoining) delete finalUpdatedDetails.yearOfJoining;
       onSave(finalUpdatedDetails);
       onClose();
     };
@@ -500,10 +564,10 @@ function CustomerDetails({ route, navigation }) {
         setIsFetchingLocation(true);
         const location = await getMobileActionLocation({
           requirePrecise: false,
-          timeoutMs: 15000,
-          cacheMaxAgeMs: 120000,
-          cacheRequiredAccuracy: 200,
-          balancedRequiredAccuracy: 200,
+          timeoutMs: 60000,
+          cacheMaxAgeMs: 300000,
+          cacheRequiredAccuracy: 1000,
+          balancedRequiredAccuracy: 1000,
         });
 
         setUpdatedDetails((prevDetails) => ({
@@ -541,63 +605,94 @@ function CustomerDetails({ route, navigation }) {
     };
 
     return (
-      <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>Edit Customer Details</Text>
-          <ScrollView>
-            <View style={styles.tabContainer}>
+      <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+        <SafeAreaView style={editCustomerStyles.safeArea} edges={['top', 'bottom']}>
+          <KeyboardAvoidingView
+            style={editCustomerStyles.keyboardView}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={editCustomerStyles.header}>
               <TouchableOpacity
-                style={[styles.tabItem, activeTab === 'general' && styles.activeTab]}
+                style={editCustomerStyles.headerButton}
+                onPress={onClose}
+                accessibilityLabel="Go back"
+              >
+                <Ionicons name="arrow-back" size={22} color="#1F2937" />
+              </TouchableOpacity>
+              <View style={editCustomerStyles.headerCopy}>
+                <Text style={editCustomerStyles.title}>Edit Customer</Text>
+                <Text style={editCustomerStyles.subtitle}>Update customer information</Text>
+              </View>
+              <TouchableOpacity
+                style={editCustomerStyles.headerButton}
+                onPress={onClose}
+                accessibilityLabel="Close edit customer"
+              >
+                <Ionicons name="close" size={22} color="#1F2937" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={editCustomerStyles.tabContainer}>
+              <TouchableOpacity
+                style={[editCustomerStyles.tabItem, activeTab === 'general' && editCustomerStyles.activeTab]}
                 onPress={() => setActiveTab('general')}
               >
-                <Text style={[styles.tabText, activeTab === 'general' && styles.activeTabText]}>
+                <Ionicons name="person-outline" size={16} color={activeTab === 'general' ? '#4F46E5' : '#7C8494'} />
+                <Text style={[editCustomerStyles.tabText, activeTab === 'general' && editCustomerStyles.activeTabText]}>
                   General
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.tabItem, activeTab === 'location' && styles.activeTab]}
+                style={[editCustomerStyles.tabItem, activeTab === 'location' && editCustomerStyles.activeTab]}
                 onPress={() => setActiveTab('location')}
               >
-                <Text style={[styles.tabText, activeTab === 'location' && styles.activeTabText]}>
+                <Ionicons name="location-outline" size={16} color={activeTab === 'location' ? '#4F46E5' : '#7C8494'} />
+                <Text style={[editCustomerStyles.tabText, activeTab === 'location' && editCustomerStyles.activeTabText]}>
                   Location
                 </Text>
               </TouchableOpacity>
             </View>
-            <ScrollView contentContainerStyle={styles.modalContentContainer}>
+
+            <ScrollView
+              style={editCustomerStyles.formScroll}
+              contentContainerStyle={editCustomerStyles.formScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
               {activeTab === 'general' && (
-                <View style={styles.modalContent}>
-                  <Text style={styles.label}>Shop Name</Text>
+                <View style={[styles.modalContent, editCustomerStyles.formCard]}>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Shop Name</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Shop Name"
                     value={updatedDetails.storeName}
                     onChangeText={(value) => handleInputChange('storeName', value)}
                   />
-                  <Text style={styles.label}>First Name</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>First Name</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="First Name"
                     value={updatedDetails.clientFirstName}
                     onChangeText={(value) => handleInputChange('clientFirstName', value)}
                   />
-                  <Text style={styles.label}>Last Name</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Last Name</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Last Name"
                     value={updatedDetails.clientLastName}
                     onChangeText={(value) => handleInputChange('clientLastName', value)}
                   />
-                  <Text style={styles.label}>Phone</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Phone</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Phone"
                     value={updatedDetails.primaryContact?.toString()}
                     onChangeText={(value) => handleInputChange('primaryContact', value)}
                     keyboardType="phone-pad"
                   />
-                  <Text style={styles.label}>Date of Birth</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Date of Birth</Text>
                   <TouchableOpacity
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input, editCustomerStyles.dateInput]}
                     onPress={() => setIsDobPickerVisible(true)}
                   >
                     <Text
@@ -619,36 +714,49 @@ function CustomerDetails({ route, navigation }) {
                         : 'Select date'}
                     </Text>
                   </TouchableOpacity>
-                  <Text style={styles.label}>Monthly Sales</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Year of Joining</Text>
+                  <View style={editCustomerStyles.selectWrapper}>
+                    <Select
+                      options={YEAR_OF_JOINING_OPTIONS}
+                      placeholder="Select year"
+                      onSelect={(option) => handleInputChange('yearOfJoining', option.value)}
+                      selectedOption={updatedDetails.yearOfJoining
+                        ? { label: String(updatedDetails.yearOfJoining), value: Number(updatedDetails.yearOfJoining) }
+                        : null}
+                    />
+                  </View>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Monthly Sales</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Monthly Sales"
                     value={updatedDetails.monthlySale?.toString()}
                     onChangeText={(value) => handleInputChange('monthlySale', value)}
                     keyboardType="numeric"
                   />
-                  <Text style={styles.label}>Email</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Email</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Email"
                     value={updatedDetails.email}
                     onChangeText={(value) => handleInputChange('email', value)}
                     keyboardType="email-address"
                   />
-                  <Text style={styles.label}>Client Type</Text>
-                  <Select
-                    options={clientTypeOptions}
-                    placeholder="Select an option"
-                    onSelect={(option) => {
-                      setSelectedClientType(option.value);
-                      handleInputChange('clientType', option.value);
-                      handleSelect(option);
-                    }}
-                    selectedOption={selectedOption || (customClientType ? { label: customClientType, value: 'others' } : null)}
-                  />
+                  <Text style={[styles.label, editCustomerStyles.label]}>Client Type</Text>
+                  <View style={editCustomerStyles.selectWrapper}>
+                    <Select
+                      options={CLIENT_TYPE_OPTIONS}
+                      placeholder="Select an option"
+                      onSelect={(option) => {
+                        setSelectedClientType(option.value);
+                        handleInputChange('clientType', option.value);
+                        handleSelect(option);
+                      }}
+                      selectedOption={selectedOption || (customClientType ? { label: customClientType, value: 'others' } : null)}
+                    />
+                  </View>
                   {selectedOption && selectedOption.value === 'others' && (
                     <TextInput
-                      style={styles.input}
+                      style={[styles.input, editCustomerStyles.input]}
                       placeholder="Enter custom client type"
                       value={customClientType}
                       onChangeText={(value) => {
@@ -658,9 +766,9 @@ function CustomerDetails({ route, navigation }) {
                       }}
                     />
                   )}
-                  <Text style={styles.label}>GST Number</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>GST Number</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="GST Number"
                     value={updatedDetails.gstNumber}
                     onChangeText={(value) => handleInputChange('gstNumber', value)}
@@ -668,76 +776,75 @@ function CustomerDetails({ route, navigation }) {
                 </View>
               )}
               {activeTab === 'location' && (
-                <View style={styles.modalContent}>
-                  <Text style={styles.label}>Address Line 1</Text>
+                <View style={[styles.modalContent, editCustomerStyles.formCard]}>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Address Line 1</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Address Line 1"
                     value={updatedDetails.addressLine1}
                     onChangeText={(value) => handleInputChange('addressLine1', value)}
                   />
-                  <Text style={styles.label}>Address Line 2</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Address Line 2</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Address Line 2"
                     value={updatedDetails.addressLine2}
                     onChangeText={(value) => handleInputChange('addressLine2', value)}
                   />
-                  <Text style={styles.label}>Village</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Village</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Village"
                     value={updatedDetails.subDistrict}
                     onChangeText={(value) => handleInputChange('subDistrict', value)}
                   />
-                  <Text style={styles.label}>Taluka</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Taluka</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Taluka"
                     value={updatedDetails.district}
                     onChangeText={(value) => handleInputChange('district', value)}
                   />
-                  <Text style={styles.label}>City</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>City</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="City"
                     value={updatedDetails.city}
                     onChangeText={(value) => handleInputChange('city', value)}
                   />
-                  <Text style={styles.label}>State</Text>
-                  <Select
-                    options={indianStates}
-                    placeholder="Select a state"
-                    onSelect={(option) => {
-                      setSelectedState(option.value);
-                      handleInputChange('state', option.value);
-                    }}
-                    selectedOption={selectedState ? { label: selectedState, value: selectedState } : null}
-                  />
-                  <Text style={styles.label}>Pincode</Text>
+                  <Text style={[styles.label, editCustomerStyles.label]}>State</Text>
+                  <View style={editCustomerStyles.selectWrapper}>
+                    <Select
+                      options={indianStates}
+                      placeholder="Select a state"
+                      onSelect={(option) => {
+                        setSelectedState(option.value);
+                        handleInputChange('state', option.value);
+                      }}
+                      selectedOption={selectedState ? { label: selectedState, value: selectedState } : null}
+                    />
+                  </View>
+                  <Text style={[styles.label, editCustomerStyles.label]}>Pincode</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, editCustomerStyles.input]}
                     placeholder="Pincode"
                     value={updatedDetails.pincode?.toString()}
                     onChangeText={(value) => handleInputChange('pincode', value)}
                     keyboardType="numeric"
                   />
                   <TouchableOpacity
-                    style={[styles.footerButton, styles.saveButton, isFetchingLocation && styles.disabledButton]}
+                    style={[editCustomerStyles.locationButton, isFetchingLocation && styles.disabledButton]}
                     onPress={getLocation}
                     disabled={isFetchingLocation}
                   >
-                    {isFetchingLocation ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : null}
-                    <Text style={styles.locationButtonText}>
+                    {isFetchingLocation ? <ActivityIndicator size="small" color="#4F46E5" /> : <Ionicons name="locate-outline" size={19} color="#4F46E5" />}
+                    <Text style={editCustomerStyles.locationButtonText}>
                       {isFetchingLocation ? 'Fetching Location...' : 'Choose Current Location'}
                     </Text>
                   </TouchableOpacity>
                 </View>
               )}
             </ScrollView>
-          </ScrollView>
           <DatePicker
             isVisible={isDobPickerVisible}
             onClose={() => setIsDobPickerVisible(false)}
@@ -748,15 +855,17 @@ function CustomerDetails({ route, navigation }) {
             }}
             allowPast
           />
-          <View style={styles.modalFooter}>
-            <TouchableOpacity style={[styles.footerButton, styles.saveButton]} onPress={handleSave}>
-              <Text style={[styles.footerButtonText, styles.saveButtonText]}>Save</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.footerButton, styles.cancelButton]} onPress={onClose}>
-              <Text style={[styles.footerButtonText, styles.cancelButtonText]}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+            <View style={editCustomerStyles.footer}>
+              <TouchableOpacity style={editCustomerStyles.saveButton} onPress={handleSave}>
+                <Ionicons name="checkmark" size={19} color="#FFFFFF" />
+                <Text style={editCustomerStyles.saveButtonText}>Save changes</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={editCustomerStyles.cancelButton} onPress={onClose}>
+                <Text style={editCustomerStyles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
     );
   };
@@ -850,6 +959,16 @@ function CustomerDetails({ route, navigation }) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} accessibilityRole="button" accessibilityLabel="Go back">
+          <Ionicons name="arrow-back" size={23} color="#1F2937" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Customer Details</Text>
+        <TouchableOpacity style={styles.headerEditButton} onPress={() => setModalVisible(true)}>
+          <Ionicons name="create-outline" size={17} color="#4F46E5" />
+          <Text style={styles.headerEditButtonText}>Edit</Text>
+        </TouchableOpacity>
+      </View>
       <ScrollView
         style={styles.pageScroll}
         contentContainerStyle={styles.pageScrollContent}
@@ -863,7 +982,7 @@ function CustomerDetails({ route, navigation }) {
             <View style={styles.birthdayTextContainer}>
               <Text style={styles.birthdayTitle}>🎉 Happy Birthday! 🎉</Text>
               <Text style={styles.birthdayMessage}>
-                Today is {customerDetails.clientFirstName} {customerDetails.clientLastName}'s birthday!
+                Today is {[customerDetails.clientFirstName, customerDetails.clientLastName].filter(Boolean).join(' ')}'s birthday!
               </Text>
             </View>
           </View>
@@ -879,7 +998,7 @@ function CustomerDetails({ route, navigation }) {
         onSave={(updatedDetails) => {
           console.log('Update Store Payload (PUT /store/edit):', JSON.stringify(updatedDetails, null, 2));
           setCustomerDetails(updatedDetails);
-          axios.put(`https://api.gajkesaristeels.in/store/edit?id=${customerId}`, updatedDetails, {
+          axios.put(`${API_BASE_URL}/store/edit?id=${customerId}`, updatedDetails, {
             headers: {
               'Authorization': `Bearer ${authToken}`
             }
@@ -981,30 +1100,72 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F3F4F6',
   },
-  pageScroll: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingTop: 0,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    elevation: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0,
+    shadowRadius: 0,
+  },
+  backButton: {
+    alignItems: 'flex-start',
+    padding: 8,
+    width: 56,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    flex: 1,
+    textAlign: 'center',
+  },
+  headerSpacer: {
+    width: 40, // Same width as back button for centering
+  },
+  headerEditButton: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 8,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    width: 56,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  headerEditButtonText: {
+    color: '#4F46E5',
+    fontSize: 13,
+    fontWeight: '700',
+    marginLeft: 4,
+  },
+  scrollContainer: {
     flex: 1,
   },
-  pageScrollContent: {
-    paddingBottom: 32,
-    flexGrow: 1,
-  },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    overflow: 'hidden',
     marginHorizontal: 16,
-    marginTop: 16,
-    marginBottom: 20,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    marginTop: 8,
+    marginBottom: 16,
   },
-  cardHeader: {
+  customerHeroCard: {
     backgroundColor: '#4F46E5',
-    padding: 20,
+    borderRadius: 12,
+    elevation: 3,
+    overflow: 'hidden',
+    padding: 18,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+  },
+  customerHeroMain: {
     alignItems: 'center',
+    flexDirection: 'row',
   },
   iconBtn: {
     position: 'absolute',
@@ -1017,56 +1178,188 @@ const styles = StyleSheet.create({
   editBtn: {
     right: 12,
   },
+  addDetailsButton: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 10,
+    flexDirection: 'row',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    position: 'absolute',
+    right: 12,
+    top: 12,
+    zIndex: 1,
+  },
+  addDetailsButtonText: {
+    color: '#4F46E5',
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 4,
+  },
   avatar: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginRight: 14,
   },
   avatarText: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '600',
+    color: '#4F46E5',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  customerHeroInfo: {
+    flex: 1,
+    minWidth: 0,
   },
   customerName: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 7,
+  },
+  storeNamePill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+    maxWidth: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  storeNamePillLabel: {
+    color: '#C7D2FE',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  storeNamePillText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '600',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  badgeContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
     marginBottom: 8,
   },
   badge: {
     backgroundColor: '#EEF2FF',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 20,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
   professionalBadge: {
-    backgroundColor: '#4A90E2',
+    backgroundColor: '#EEF2FF',
   },
   badgeText: {
     color: '#4F46E5',
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '700',
     textTransform: 'capitalize',
   },
+  dealerTypeBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  exclusiveBadge: {
+    backgroundColor: '#10B981',
+  },
+  nonExclusiveBadge: {
+    backgroundColor: '#F59E0B',
+  },
+  dealerTypeBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  ownerRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    minWidth: 0,
+  },
+  ownerText: {
+    color: '#E0E7FF',
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 5,
+  },
+  customerHeroDivider: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    height: 1,
+    marginTop: 18,
+    marginBottom: 12,
+  },
+  customerStatsRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  customerStatItem: {
+    flex: 1,
+    minWidth: 0,
+  },
+  customerStatTop: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  customerStatValue: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  customerStatLabel: {
+    color: '#C7D2FE',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 5,
+    textAlign: 'center',
+  },
+  customerStatDivider: {
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+    marginHorizontal: 8,
+    width: 1,
+  },
   cardBody: {
-    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    elevation: 2,
+    marginTop: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
   },
   tabs: {
     flexDirection: 'row',
-    marginBottom: 16,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    padding: 4,
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#EEF2FF',
+    borderBottomWidth: 1,
+    paddingHorizontal: 0,
   },
   tabBtn: {
     flex: 1,
-    paddingVertical: 8,
     alignItems: 'center',
-    borderRadius: 6,
+    borderBottomColor: 'transparent',
+    borderBottomWidth: 2,
+    paddingVertical: 13,
+  },
+  activeInfoTab: {
+    borderBottomColor: '#4F46E5',
   },
   activeTab: {
     backgroundColor: '#FFFFFF',
@@ -1078,12 +1371,22 @@ const styles = StyleSheet.create({
   },
   tabBtnText: {
     color: '#6B7280',
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  activeInfoTabText: {
+    color: '#4F46E5',
+    fontWeight: '700',
   },
   activeTabText: {
     color: '#4F46E5',
     fontWeight: '600',
+  },
+  infoTabContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 4,
   },
   infoRow: {
     flexDirection: 'row',
@@ -1112,11 +1415,41 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     fontWeight: '500',
   },
+  infoRowActionButton: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderColor: '#DDE3FF',
+    borderRadius: 10,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    marginLeft: 10,
+    width: 38,
+  },
+  productCategoriesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  productCategoryChip: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  productCategoryText: {
+    fontSize: 12,
+    color: '#4F46E5',
+    fontWeight: '500',
+  },
   contentContainer: {
+    flex: 1,
     backgroundColor: '#F3F4F6',
     paddingHorizontal: 16,
     paddingTop: 16,
-    paddingBottom: 16,
   },
   tabContainer: {
     flexDirection: 'row',
@@ -1155,7 +1488,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
-    minHeight: 220,
+    flex: 1,
   },
   createVisitButton: {
     backgroundColor: '#4F46E5',
@@ -1165,6 +1498,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     marginBottom: 16,
+    marginTop: 20,
     gap: 8,
   },
   createVisitButtonText: {
@@ -1186,6 +1520,10 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     flexGrow: 1,
+    paddingBottom: 120,
+  },
+  modalContentContainer: {
+    paddingBottom: 24,
   },
   label: {
     fontSize: 16,
@@ -1203,12 +1541,274 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     marginBottom: 16,
   },
+  sitesSummaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E0E7FF',
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+    padding: 16,
+  },
+  sitesSummaryHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  sitesSummaryHeading: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  sitesSummaryIcon: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 10,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  sitesSummaryTitleWrap: {
+    flex: 1,
+  },
+  sitesSummaryTitle: {
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  sitesSummarySubtitle: {
+    color: '#6B7280',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  sitesCountBadge: {
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+    borderRadius: 16,
+    justifyContent: 'center',
+    minWidth: 32,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  sitesCountBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  sitesLoadingRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginBottom: 12,
+  },
+  sitesLoadingText: {
+    color: '#4B5563',
+    fontSize: 13,
+    marginLeft: 8,
+  },
+  sitesSummaryBody: {
+    gap: 10,
+    marginBottom: 12,
+  },
+  sitesNamesPanel: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 12,
+  },
+  sitesTotalPanel: {
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 12,
+  },
+  sitesMetricLabelRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 6,
+  },
+  sitesSummaryLabel: {
+    color: '#6B7280',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  sitesSummaryValue: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 21,
+  },
+  siteNameList: {
+    gap: 8,
+  },
+  siteNamePill: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  siteNameDot: {
+    backgroundColor: '#4F46E5',
+    borderRadius: 4,
+    height: 7,
+    marginRight: 8,
+    width: 7,
+  },
+  siteNamePillText: {
+    color: '#111827',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  sitesEmptyValue: {
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  sitesTotalValue: {
+    color: '#111827',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  sitesErrorText: {
+    color: '#B91C1C',
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  addSiteButton: {
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+    borderRadius: 10,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 8,
+  },
+  addSiteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   modalFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingVertical: 16,
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
+  },
+  addDetailsModalContainer: {
+    backgroundColor: '#F3F4F6',
+    flex: 1,
+  },
+  addDetailsHeader: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#E5E7EB',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  addDetailsCloseButton: {
+    alignItems: 'flex-start',
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  addDetailsTitle: {
+    color: '#111827',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  addDetailsContent: {
+    padding: 16,
+    paddingBottom: 16,
+  },
+  editSectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginBottom: 16,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 2,
+  },
+  editSectionTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 14,
+  },
+  addDetailsInputContainer: {
+    marginBottom: 16,
+  },
+  addDetailsLabel: {
+    color: '#4B5563',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  addDetailsInput: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    borderWidth: 1,
+    color: '#111827',
+    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  noMissingDetailsCard: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 34,
+  },
+  noMissingDetailsTitle: {
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '700',
+    marginTop: 12,
+  },
+  noMissingDetailsText: {
+    color: '#6B7280',
+    fontSize: 13,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  addDetailsFooter: {
+    backgroundColor: '#FFFFFF',
+    borderTopColor: '#E5E7EB',
+    borderTopWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  addDetailsSaveButton: {
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+    borderRadius: 10,
+    justifyContent: 'center',
+    minHeight: 46,
+  },
+  addDetailsSaveButtonDisabled: {
+    opacity: 0.65,
+  },
+  addDetailsSaveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   footerButton: {
     paddingVertical: 12,
@@ -1219,9 +1819,6 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     backgroundColor: '#4F46E5',
-  },
-  disabledButton: {
-    opacity: 0.65,
   },
   cancelButton: {
     backgroundColor: '#F3F4F6',
@@ -1235,6 +1832,31 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: '#4B5563',
+  },
+  siteManagerContainer: {
+    backgroundColor: '#F7F9FC',
+    flex: 1,
+  },
+  siteManagerHeader: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#E5E7EB',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  siteManagerCloseButton: {
+    alignItems: 'flex-start',
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  siteManagerTitle: {
+    color: '#111827',
+    fontSize: 20,
+    fontWeight: '700',
   },
   closeButton: {
     alignSelf: 'flex-end',
@@ -1399,43 +2021,502 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
-    marginLeft: 8,
   },
-  birthdayCard: {
-    backgroundColor: '#FDF2F8',
+  professionalCard: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
-    marginHorizontal: 16,
-    marginTop: 16,
-    marginBottom: 8,
+    marginBottom: 12,
     borderWidth: 2,
-    borderColor: '#EC4899',
-    shadowColor: '#EC4899',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
+    borderColor: '#93C5FD',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  professionalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  professionalAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  professionalInfo: {
+    flex: 1,
+  },
+  professionalName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  professionalRole: {
+    fontSize: 14,
+    color: '#6B7280',
+    textTransform: 'capitalize',
+  },
+  professionalDetails: {
+    gap: 10,
+  },
+  professionalDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  professionalDetailLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
+    width: 80,
+  },
+  professionalDetailValue: {
+    fontSize: 14,
+    color: '#1F2937',
+    flex: 1,
+  },
+  consumptionCardName: {
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  consumptionCardRole: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
+  },
+  consumptionDetailLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  consumptionDetailValue: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  siteContactsSection: {
+    marginTop: 2,
+  },
+  siteContactsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingHorizontal: 2,
+  },
+  siteContactsTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  siteContactsIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  siteContactsTitle: {
+    color: '#293241',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '700',
+  },
+  siteContactsSubtitle: {
+    color: '#7C8494',
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 1,
+  },
+  siteContactsCountBadge: {
+    minWidth: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+  },
+  siteContactsCountText: {
+    color: '#4338CA',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  siteContactCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E6E9EF',
+    borderRadius: 11,
+    padding: 12,
+    marginBottom: 10,
+    shadowColor: '#182230',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  siteContactHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  siteContactAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  siteContactAvatarText: {
+    color: '#4F46E5',
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  siteContactIdentity: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'flex-start',
+  },
+  siteContactCallButton: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderColor: '#DDE3FF',
+    borderRadius: 11,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    marginLeft: 8,
+    width: 38,
+  },
+  siteContactName: {
+    maxWidth: '100%',
+    color: '#293241',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  siteContactRoleBadge: {
+    maxWidth: '100%',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 7,
+    backgroundColor: '#F2F4F7',
+  },
+  siteContactRoleText: {
+    color: '#626C7C',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  siteContactPrimaryMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: '#EEF0F4',
+  },
+  siteContactMetaRow: {
+    flexBasis: '46%',
+    flexGrow: 1,
+    minWidth: 126,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  siteContactMetaText: {
+    flex: 1,
+    color: '#4B5563',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  siteContactDetailsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: '#EEF0F4',
+  },
+  siteContactDetailItem: {
+    flexBasis: '46%',
+    flexGrow: 1,
+    minWidth: 126,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  siteContactDetailTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  siteContactDetailLabel: {
+    color: '#7C8494',
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+    marginBottom: 1,
+  },
+  siteContactDetailValue: {
+    color: '#293241',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  pageScroll: {
+    flex: 1,
+  },
+  pageScrollContent: {
+    paddingBottom: 24,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editBtn: {
+    backgroundColor: '#4F46E5',
+  },
+  heroEditButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  disabledButton: {
+    opacity: 0.55,
+  },
+  birthdayCard: {
+    backgroundColor: '#FFF5F8',
+    borderColor: '#FBCFE8',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
   },
   birthdayCardContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+  },
+  birthdayMessage: {
+    color: '#9D174D',
+    fontSize: 13,
+    marginTop: 2,
   },
   birthdayTextContainer: {
     flex: 1,
+    marginLeft: 12,
   },
   birthdayTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#EC4899',
-    marginBottom: 4,
+    color: '#831843',
+    fontSize: 16,
+    fontWeight: '700',
   },
-  birthdayMessage: {
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#9CA3AF',
+    marginTop: 12,
+  },
+});
+
+const editCustomerStyles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#F4F5F8',
+  },
+  keyboardView: {
+    flex: 1,
+  },
+  header: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#E7EAF0',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    minHeight: 64,
+    paddingHorizontal: 16,
+  },
+  headerButton: {
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 12,
+  },
+  title: {
+    color: '#202938',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 23,
+  },
+  subtitle: {
+    color: '#7C8494',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 1,
+  },
+  tabContainer: {
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#E7EAF0',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  tabItem: {
+    alignItems: 'center',
+    borderRadius: 10,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  activeTab: {
+    backgroundColor: '#EEF2FF',
+  },
+  tabText: {
+    color: '#7C8494',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  activeTabText: {
+    color: '#4F46E5',
+  },
+  formScroll: {
+    flex: 1,
+  },
+  formScrollContent: {
+    padding: 16,
+    paddingBottom: 28,
+  },
+  formCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E7EAF0',
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+  },
+  label: {
+    color: '#4B5563',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  input: {
+    backgroundColor: '#F9FAFB',
+    borderColor: '#DCE1EA',
+    borderRadius: 10,
+    minHeight: 48,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+  },
+  dateInput: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  selectWrapper: {
+    marginBottom: 16,
+  },
+  locationButton: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
+    borderRadius: 11,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 48,
+    paddingHorizontal: 16,
+  },
+  locationButtonText: {
+    color: '#4F46E5',
     fontSize: 14,
-    color: '#9F1239',
+    fontWeight: '800',
+  },
+  footer: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderTopColor: '#E7EAF0',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  saveButton: {
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+    borderRadius: 11,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  cancelButton: {
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 11,
+    justifyContent: 'center',
+    minHeight: 48,
+    paddingHorizontal: 18,
+  },
+  cancelButtonText: {
+    color: '#4B5563',
+    fontSize: 14,
+    fontWeight: '800',
   },
 });
 

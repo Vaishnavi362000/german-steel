@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, ScrollView, StyleSheet, TouchableOpacity, Text, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,8 +7,11 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { LinearGradient } from 'expo-linear-gradient';
 import Modal from 'react-native-modal';
 import { getPendingCustomers } from './utils/offlineStorage';
+import { fetchMobileHomeSummary, shouldUseLegacyHomeFallback } from './utils/optimizedVisitApi';
+import { fetchMyMonthlySalesTargetSummary } from './utils/salesTargetApi';
 import LocationService from './LocationService';
 
 import RecentVisits from './components/RecentVisits';
@@ -19,6 +23,7 @@ import PendingCustomers from './components/PendingCustomers';
 const HomeScreen = ({ authToken }) => {
   const navigation = useNavigation();
   const [visitsData, setVisitsData] = useState([]);
+  const [homeMetrics, setHomeMetrics] = useState(null);
   const [employeeFirstName, setEmployeeFirstName] = useState('');
   const [greetingMessage, setGreetingMessage] = useState('');
   const [unreadTasks, setUnreadTasks] = useState(0);
@@ -30,6 +35,8 @@ const HomeScreen = ({ authToken }) => {
   const [dailyPricingMessage, setDailyPricingMessage] = useState('');
   const [isPendingModalVisible, setIsPendingModalVisible] = useState(false);
   const [hasPendingRequests, setHasPendingRequests] = useState(false);
+  const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null);
+  const [isTargetModalVisible, setIsTargetModalVisible] = useState(false);
 
   const updateLocation = useCallback(async () => {
     try {
@@ -45,9 +52,7 @@ const HomeScreen = ({ authToken }) => {
   useFocusEffect(
     useCallback(() => {
       updateLocation();
-      fetchVisitsData();
-      fetchNotifications();
-      fetchDailyPricingCount();
+      refreshHomeData();
       checkPendingRequests();
       return () => { };
     }, [updateLocation])
@@ -60,14 +65,6 @@ const HomeScreen = ({ authToken }) => {
     checkPendingRequests();
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchVisitsData();
-      fetchNotifications();
-      checkPendingRequests();
-    }, [])
-  );
-
   const checkTravelModeQuestion = useCallback(async () => {
     const today = new Date().toISOString().split('T')[0];
     try {
@@ -75,7 +72,7 @@ const HomeScreen = ({ authToken }) => {
       console.log('Checking for employee ID:', employeeId); // Debug log
 
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/attendance-log/getByDate?date=${today}`,
+        `${API_BASE_URL}/attendance-log/getByDate?date=${today}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -83,8 +80,21 @@ const HomeScreen = ({ authToken }) => {
         }
       );
 
-      if (response.data && Array.isArray(response.data)) {
-        const currentEmployeeData = response.data.find(employee => employee.employeeId === parseInt(employeeId));
+      const attendanceRows = Array.isArray(response.data)
+        ? response.data
+        : Array.isArray(response.data?.content)
+          ? response.data.content
+          : [];
+
+      if (attendanceRows.length > 0) {
+        const normalizedEmployeeId = String(employeeId ?? '');
+        const currentEmployeeData = attendanceRows.find((employee) => {
+          const rowEmployeeId = employee?.employeeId
+            ?? employee?.employee?.employeeId
+            ?? employee?.employee?.id
+            ?? employee?.id;
+          return String(rowEmployeeId ?? '') === normalizedEmployeeId;
+        });
 
         if (currentEmployeeData) {
           console.log('Employee data found:', currentEmployeeData); // Debug log
@@ -101,7 +111,7 @@ const HomeScreen = ({ authToken }) => {
             setIsTravelModeModalVisible(true);
           }
         } else {
-          console.error('Case 4: Current employee data not found, showing modal');
+          console.warn('No attendance record found for the current employee; showing travel mode prompt.');
           setIsTravelModeModalVisible(true);
         }
       } else {
@@ -109,7 +119,20 @@ const HomeScreen = ({ authToken }) => {
         setIsTravelModeModalVisible(true);
       }
     } catch (error) {
-      console.error('Error checking travel mode:', error);
+      const status = error.response?.status;
+      console.error('Error checking travel mode:', {
+        status,
+        data: error.response?.data,
+        message: error.message,
+      });
+
+      // A role that cannot access this optional endpoint should not be
+      // trapped in a repeated travel-mode prompt.
+      if (status === 403) {
+        setIsTravelModeModalVisible(false);
+        return;
+      }
+
       setIsTravelModeModalVisible(true);
     }
   }, [authToken]);
@@ -119,7 +142,7 @@ const HomeScreen = ({ authToken }) => {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/attendance-log/editVehicle?id=${employeeId}&date=${today}&vehicleType=${mode}&isDefault=false`,
+        `${API_BASE_URL}/attendance-log/editVehicle?id=${employeeId}&date=${today}&vehicleType=${mode}&isDefault=false`,
         {},
         {
           headers: {
@@ -128,14 +151,29 @@ const HomeScreen = ({ authToken }) => {
         }
       );
 
-      if (response.data.includes('Vehicle type updated successfully')) {
+      if (response.status >= 200 && response.status < 300) {
         setTravelMode(mode);
         setIsTravelModeModalVisible(false);
       } else {
         throw new Error('Unexpected response when updating vehicle type');
       }
     } catch (error) {
-      console.error('Error updating travel mode:', error);
+      const status = error.response?.status;
+      console.error('Error updating travel mode:', {
+        status,
+        data: error.response?.data,
+        message: error.message,
+      });
+
+      if (status === 403) {
+        setIsTravelModeModalVisible(false);
+        Alert.alert(
+          'Travel mode unavailable',
+          'Your account is not permitted to save travel mode on this server yet. You can continue using the app.'
+        );
+        return;
+      }
+
       Alert.alert('Error', 'Failed to update travel mode. Please try again.');
     }
   };
@@ -149,7 +187,7 @@ const HomeScreen = ({ authToken }) => {
       const startDateFormatted = startDate.toISOString().split('T')[0];
       const endDateFormatted = today.toISOString().split('T')[0];
 
-      const response = await axios.get(`https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDateFormatted}&end=${endDateFormatted}`, {
+      const response = await axios.get(`${API_BASE_URL}/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDateFormatted}&end=${endDateFormatted}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -173,11 +211,68 @@ const HomeScreen = ({ authToken }) => {
     }
   };
 
+  const fetchOptimizedHomeSummary = async () => {
+    const employeeId = await AsyncStorage.getItem('employeeId');
+    if (!employeeId) throw new Error('Employee ID not found');
+
+    const summary = await fetchMobileHomeSummary({ employeeId, authToken });
+    const dailyPricingCount = Number(summary?.dailyPricingCount || 0);
+    const completedVisits = Number(summary?.completedVisits ?? summary?.totalVisits ?? 0);
+
+    setHomeMetrics({
+      totalVisits: Number(summary?.totalVisits || 0),
+      totalVisitsToday: Number(summary?.totalVisitsToday || 0),
+      totalVisitsThisWeek: Number(summary?.totalVisitsThisWeek || 0),
+      completedVisits,
+    });
+    setVisitsData(Array.isArray(summary?.recentCompletedVisits) ? summary.recentCompletedVisits : []);
+    setDailyPricingCount(dailyPricingCount);
+    setDailyPricingMessage(
+      summary?.dailyPricingMessage
+      || (dailyPricingCount < 5
+        ? `Add ${5 - dailyPricingCount} more daily pricing entries`
+        : 'Great job! You have added 5 or more daily pricing entries'),
+    );
+
+    await fetchNotifications(Number(summary?.unreadVisitTasks || 0));
+  };
+
+  const fetchMonthlyTarget = async () => {
+    try {
+      setMonthlyTargetSummary(await fetchMyMonthlySalesTargetSummary({ authToken }));
+    } catch (error) {
+      // Target assignment can be deployed after the app. Do not block Home if it is not available yet.
+      console.log('Monthly target summary unavailable:', error?.message || error);
+      setMonthlyTargetSummary(null);
+    }
+  };
+
+  const refreshHomeData = async () => {
+    fetchMonthlyTarget();
+    try {
+      await fetchOptimizedHomeSummary();
+    } catch (error) {
+      if (!shouldUseLegacyHomeFallback(error)) {
+        console.error('Error fetching optimized mobile home summary:', error);
+        return;
+      }
+
+      // The temporary Gajkesari backend can keep serving the existing calls
+      // until the German Steel optimized endpoint is deployed there.
+      setHomeMetrics(null);
+      await Promise.all([
+        fetchVisitsData(),
+        fetchNotifications(),
+        fetchDailyPricingCount(),
+      ]);
+    }
+  };
+
   const fetchEmployeeData = async () => {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
 
-      const response = await axios.get(`https://api.gajkesaristeels.in/employee/getById?id=${employeeId}`, {
+      const response = await axios.get(`${API_BASE_URL}/employee/getById?id=${employeeId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -189,35 +284,32 @@ const HomeScreen = ({ authToken }) => {
     }
   };
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (unreadVisitTasksFromSummary) => {
     try {
-      const employeeId = await AsyncStorage.getItem('employeeId');
       const today = moment();
-      const startDate = today.clone().subtract(2, 'days').format('YYYY-MM-DD');
-      const endDate = today.clone().add(1, 'days').format('YYYY-MM-DD');
+      let unreadVisitTasks = unreadVisitTasksFromSummary;
 
-      // Visit notifications
-      const response = await axios.get(
-        `https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDate}&end=${endDate}`,
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        }
-      );
+      if (unreadVisitTasks === undefined) {
+        const employeeId = await AsyncStorage.getItem('employeeId');
+        const startDate = today.clone().subtract(2, 'days').format('YYYY-MM-DD');
+        const endDate = today.clone().add(1, 'days').format('YYYY-MM-DD');
+        const response = await axios.get(
+          `${API_BASE_URL}/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDate}&end=${endDate}`,
+          { headers: { Authorization: `Bearer ${authToken}` } },
+        );
 
-      const assignedVisits = response.data.filter(visit => visit.isSelfGenerated === false);
-
-      const unreadVisitTasks = assignedVisits.filter(visit =>
-        !visit.checkoutLatitude && !visit.checkoutLongitude && !visit.checkoutDate && !visit.checkoutTime
-      ).length;
+        const assignedVisits = response.data.filter(visit => visit.isSelfGenerated === false);
+        unreadVisitTasks = assignedVisits.filter(visit =>
+          !visit.checkoutLatitude && !visit.checkoutLongitude && !visit.checkoutDate && !visit.checkoutTime,
+        ).length;
+      }
 
       // Birthday notifications for today
       const birthdayStart = today.clone().format('YYYY-MM-DD');
       const birthdayEnd = birthdayStart;
 
       const birthdayResponse = await axios.get(
-        `https://api.gajkesaristeels.in/store/getByDobDateRange?startDate=${birthdayStart}&endDate=${birthdayEnd}`,
+        `${API_BASE_URL}/store/getByDobDateRange?startDate=${birthdayStart}&endDate=${birthdayEnd}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -242,7 +334,7 @@ const HomeScreen = ({ authToken }) => {
       const today = new Date().toISOString().split('T')[0];
 
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/brand/getByDateRangeForEmployee?start=${today}&end=${today}&id=${employeeId}`,
+        `${API_BASE_URL}/brand/getByDateRangeForEmployee?start=${today}&end=${today}&id=${employeeId}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -300,6 +392,8 @@ const HomeScreen = ({ authToken }) => {
     currentWeekStart.setDate(currentWeekStart.getDate() - currentWeekStart.getDay());
     const currentWeekStartFormatted = currentWeekStart.toISOString().split('T')[0];
 
+    if (homeMetrics) return homeMetrics;
+
     const totalVisits = Array.isArray(visitsData) ? visitsData.length : 0;
     const totalVisitsToday = Array.isArray(visitsData) ? visitsData.filter((visit) => visit.visit_date === today).length : 0;
     const totalVisitsThisWeek = Array.isArray(visitsData) ? visitsData.filter((visit) => visit.visit_date >= currentWeekStartFormatted).length : 0;
@@ -308,10 +402,11 @@ const HomeScreen = ({ authToken }) => {
       totalVisits,
       totalVisitsToday,
       totalVisitsThisWeek,
+      completedVisits: totalVisits,
     };
   };
 
-  const { totalVisits, totalVisitsToday, totalVisitsThisWeek } = calculateMetrics();
+  const { totalVisits, totalVisitsToday, totalVisitsThisWeek, completedVisits } = calculateMetrics();
 
   const openCreateCustomerModal = () => {
     setIsCreateCustomerModalOpen(true);
@@ -322,7 +417,7 @@ const HomeScreen = ({ authToken }) => {
   };
 
   const handleCustomerCreated = () => {
-    fetchVisitsData();
+    refreshHomeData();
     checkPendingRequests();
   };
 
@@ -387,14 +482,14 @@ const HomeScreen = ({ authToken }) => {
             style={styles.modeButton}
             onPress={() => handleTravelModeSelection('2_WHEELER')}
           >
-            <Ionicons name="bicycle" size={24} color="#6C63FF" />
+            <Ionicons name="bicycle" size={24} color="#4F46E5" />
             <Text style={styles.modeButtonText}>2 Wheeler</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.modeButton}
             onPress={() => handleTravelModeSelection('4_WHEELER')}
           >
-            <Ionicons name="car" size={24} color="#6C63FF" />
+            <Ionicons name="car" size={24} color="#4F46E5" />
             <Text style={styles.modeButtonText}>4 Wheeler</Text>
           </TouchableOpacity>
         </View>
@@ -409,64 +504,100 @@ const HomeScreen = ({ authToken }) => {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ScrollView style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
         <Greeting
           firstName={employeeFirstName}
           message={greetingMessage}
           onProfilePress={() => navigation.navigate('UserProfile', { authToken })}
           onNotificationPress={() => navigation.navigate('Notifications1', { authToken })}
           connectivityComponent={<ConnectivityStatusIcons />}
+          unreadTasks={unreadTasks}
         />
 
-        <DailyPricingIndicator />
+        <View style={styles.homeContent}>
+          <DailyPricingIndicator />
 
-        <TouchableOpacity
-          style={styles.yesterdayButton}
-          onPress={() => navigation.navigate('YesterdayStatsScreen', { authToken })}
-        >
-          <Ionicons name="stats-chart-outline" size={20} color="#6C63FF" />
-          <Text style={styles.yesterdayButtonText}>Yesterday</Text>
-        </TouchableOpacity>
-
-        <View style={styles.metricsContainer}>
-          <View style={styles.metricsRow}>
-            <MetricCard title="Total Visits" value={totalVisits} icon="bar-chart-outline" />
-            <MetricCard title="Today's Visits" value={totalVisitsToday} icon="today-outline" />
-          </View>
-          <View style={styles.metricsRow}>
-            <MetricCard title="This Week" value={totalVisitsThisWeek} icon="calendar-outline" />
-            <MetricCard title="Completed" value={totalVisits} icon="checkmark-circle-outline" />
-          </View>
-        </View>
-
-        <RecentVisits
-          visits={visitsData}
-          onVisitPress={(visitId) => navigation.navigate('VisitScreen', { visitId, authToken })}
-          style={styles.recentVisits}
-        />
-
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={openCreateCustomerModal}
-        >
-          <Ionicons name="add" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-
-        {hasPendingRequests && (
           <TouchableOpacity
-            style={styles.pendingButton}
-            onPress={() => setIsPendingModalVisible(true)}
+            style={styles.yesterdayButton}
+            onPress={() => navigation.navigate('YesterdayStatsScreen', { authToken })}
           >
-            <Ionicons name="time-outline" size={24} color="#4F46E5" />
-            <Text style={styles.pendingButtonText}>View Pending Requests</Text>
+            <Ionicons name="stats-chart-outline" size={20} color="#4F46E5" />
+            <Text style={styles.yesterdayButtonText}>Yesterday</Text>
           </TouchableOpacity>
-        )}
 
-        {location && (
-          <Text style={styles.locationInfo}>
-            Location updated
-          </Text>
-        )}
+          <View style={styles.metricsContainer}>
+            <View style={styles.metricsRow}>
+              <MetricCard title="Total Visits" value={totalVisits} icon="bar-chart-outline" />
+              <MetricCard title="Today's Visits" value={totalVisitsToday} icon="today-outline" />
+            </View>
+            <View style={styles.metricsRow}>
+              <MetricCard title="This Week" value={totalVisitsThisWeek} icon="calendar-outline" />
+              <MetricCard title="Completed" value={completedVisits} icon="checkmark-circle-outline" />
+            </View>
+          </View>
+
+          <TouchableOpacity
+            onPress={() => setIsTargetModalVisible(true)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="View this month's sales target"
+          >
+            <LinearGradient
+              colors={['#4F46E5', '#6366F1', '#818CF8']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.monthlyTargetCard}
+            >
+              <View style={styles.monthlyTargetIcon}>
+                <Ionicons name="speedometer-outline" size={24} color="#FFFFFF" />
+              </View>
+              <View style={styles.monthlyTargetCopy}>
+                <Text style={styles.monthlyTargetTitle}>{moment().format('MMMM')} target</Text>
+                <Text style={styles.monthlyTargetCaption}>
+                  {monthlyTargetSummary?.targetTons > 0 ? 'Tap to view progress in tons' : 'No monthly target assigned'}
+                </Text>
+              </View>
+              <View style={styles.monthlyTargetValueContainer}>
+                <Text style={styles.monthlyTargetValue}>
+                  {monthlyTargetSummary?.targetTons > 0 ? `${monthlyTargetSummary.targetTons} T` : '—'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#FFFFFF" style={styles.monthlyTargetArrow} />
+            </LinearGradient>
+          </TouchableOpacity>
+
+          <RecentVisits
+            visits={visitsData}
+            onVisitPress={(visitId) => navigation.navigate('VisitScreen', { visitId, authToken })}
+          />
+
+          <TouchableOpacity
+            style={styles.addButton}
+            onPress={openCreateCustomerModal}
+          >
+            <Ionicons name="add" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+
+          {hasPendingRequests && (
+            <TouchableOpacity
+              style={styles.pendingButton}
+              onPress={() => setIsPendingModalVisible(true)}
+            >
+              <Ionicons name="time-outline" size={24} color="#4F46E5" />
+              <Text style={styles.pendingButtonText}>View Pending Requests</Text>
+            </TouchableOpacity>
+          )}
+
+          {location && (
+            <Text style={styles.locationInfo}>
+              Location updated
+            </Text>
+          )}
+        </View>
 
         <Modal
           isVisible={isPendingModalVisible}
@@ -490,7 +621,7 @@ const HomeScreen = ({ authToken }) => {
               <PendingCustomers
                 authToken={authToken}
                 onCustomerCreated={() => {
-                  fetchVisitsData();
+                  refreshHomeData();
                   checkPendingRequests();
                   if (!hasPendingRequests) {
                     setIsPendingModalVisible(false);
@@ -501,13 +632,43 @@ const HomeScreen = ({ authToken }) => {
           </View>
         </Modal>
 
-        <CreateCustomerComponent
+      <CreateCustomerComponent
           isVisible={isCreateCustomerModalOpen}
           onClose={closeCreateCustomerModal}
           authToken={authToken}
           onCustomerCreated={handleCustomerCreated}
           navigation={navigation}
-        />
+      />
+      <Modal
+        isVisible={isTargetModalVisible}
+        onBackdropPress={() => setIsTargetModalVisible(false)}
+        onBackButtonPress={() => setIsTargetModalVisible(false)}
+        style={styles.targetModal}
+      >
+        <View style={styles.targetModalCard}>
+          <View style={styles.targetModalHeader}>
+            <View>
+              <Text style={styles.targetModalTitle}>{moment().format('MMMM YYYY')} target</Text>
+              <Text style={styles.targetModalSubtitle}>Sales progress for this month</Text>
+            </View>
+            <TouchableOpacity onPress={() => setIsTargetModalVisible(false)} style={styles.targetModalClose}>
+              <Ionicons name="close" size={20} color="#4B5563" />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.targetMetricsRow}>
+            <View style={styles.targetMetric}>
+              <Text style={styles.targetMetricLabel}>Target by month</Text>
+              <Text style={styles.targetMetricValue}>{monthlyTargetSummary?.targetTons || 0} T</Text>
+            </View>
+            <View style={styles.targetMetricDivider} />
+            <View style={styles.targetMetric}>
+              <Text style={styles.targetMetricLabel}>Target achieved</Text>
+              <Text style={styles.targetMetricValue}>{monthlyTargetSummary?.achievedTons || 0} T</Text>
+            </View>
+          </View>
+          <Text style={styles.targetProgressText}>{(Number(monthlyTargetSummary?.achievementPercent) || 0).toFixed(2)}% achieved</Text>
+        </View>
+      </Modal>
       </ScrollView>
       <TravelModeModal />
     </GestureHandlerRootView>
@@ -518,8 +679,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F3F4F6',
-    paddingHorizontal: 20,
-    paddingTop: 40,
+  },
+  contentContainer: {
+    paddingTop: 8,
+    paddingBottom: 108,
+  },
+  homeContent: {
+    paddingHorizontal: 16,
   },
   header: {
     flexDirection: 'row',
@@ -535,6 +701,59 @@ const styles = StyleSheet.create({
   metricsContainer: {
     marginTop: 20,
   },
+  monthlyTargetCard: {
+    marginTop: 8,
+    marginBottom: 8,
+    padding: 18,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#4F46E5',
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  monthlyTargetIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    marginRight: 14,
+  },
+  monthlyTargetCopy: { flex: 1 },
+  monthlyTargetTitle: { fontSize: 17, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3 },
+  monthlyTargetCaption: { marginTop: 4, fontSize: 13, color: 'rgba(255, 255, 255, 0.8)', fontWeight: '500' },
+  monthlyTargetValueContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginRight: 10,
+  },
+  monthlyTargetValue: { fontSize: 16, fontWeight: '800', color: '#4F46E5' },
+  monthlyTargetArrow: {
+    opacity: 0.9,
+  },
+  targetModal: { justifyContent: 'flex-end', margin: 0 },
+  targetModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 22,
+  },
+  targetModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  targetModalTitle: { fontSize: 19, fontWeight: '800', color: '#1F2937' },
+  targetModalSubtitle: { marginTop: 3, fontSize: 13, color: '#7C8494' },
+  targetModalClose: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
+  targetMetricsRow: { flexDirection: 'row', marginTop: 22, padding: 16, borderRadius: 14, backgroundColor: '#F7F8FF', alignItems: 'center' },
+  targetMetric: { flex: 1 },
+  targetMetricLabel: { fontSize: 12, color: '#6B7280' },
+  targetMetricValue: { marginTop: 5, fontSize: 22, fontWeight: '800', color: '#4F46E5' },
+  targetMetricDivider: { width: 1, height: 42, marginHorizontal: 12, backgroundColor: '#DDE3FF' },
+  targetProgressText: { marginTop: 14, textAlign: 'center', fontSize: 13, fontWeight: '700', color: '#059669' },
   metricsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -675,7 +894,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     marginBottom: 20,
-    marginHorizontal: 20,
+    marginHorizontal: 0,
     borderWidth: 1,
     borderColor: '#E0E7FF',
   },

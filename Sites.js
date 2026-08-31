@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import {
     View,
@@ -45,7 +46,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
         try {
             setLoading(true);
             const response = await axios.get(
-                `https://api.gajkesaristeels.in/site/getByStore?id=${storeId}`,
+                `${API_BASE_URL}/site/getByStore?id=${storeId}`,
                 {
                     headers: { Authorization: `Bearer ${authToken}` },
                 }
@@ -83,7 +84,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
 
             if (editingSite) {
                 await axios.put(
-                    `https://api.gajkesaristeels.in/site/edit?id=${editingSite.id}`,
+                    `${API_BASE_URL}/site/edit?id=${editingSite.id}`,
                     siteData,
                     {
                         headers: { Authorization: `Bearer ${authToken}` },
@@ -92,7 +93,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
 
                 if (siteForm.isCompleted !== editingSite.completionStatus) {
                     await axios.put(
-                        `https://api.gajkesaristeels.in/site/markCompletionStatus?id=${editingSite.id}&status=${siteForm.isCompleted}`,
+                        `${API_BASE_URL}/site/markCompletionStatus?id=${editingSite.id}&status=${siteForm.isCompleted}`,
                         {},
                         {
                             headers: { Authorization: `Bearer ${authToken}` },
@@ -101,7 +102,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
                 }
             } else {
                 await axios.post(
-                    'https://api.gajkesaristeels.in/site/add',
+                    `${API_BASE_URL}/site/add`,
                     siteData,
                     {
                         headers: { Authorization: `Bearer ${authToken}` },
@@ -138,7 +139,7 @@ const Sites = ({ storeId, authToken, onClose, setModalVisible, onSitesUpdated, c
                     onPress: async () => {
                         try {
                             const response = await axios.delete(
-                                `https://api.gajkesaristeels.in/site/delete?id=${id}`,
+                                `${API_BASE_URL}/site/delete?id=${id}`,
                                 {
                                     headers: { Authorization: `Bearer ${authToken}` },
                                 }

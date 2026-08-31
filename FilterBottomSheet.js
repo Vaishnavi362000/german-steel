@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, FlatList } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -156,12 +156,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'flex-end',
   },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
   bottomSheetContainer: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 24,
+    maxHeight: '90%',
+  },
+  sheetScrollContent: {
+    paddingBottom: 24,
   },
   headerContainer: {
     flexDirection: 'row',

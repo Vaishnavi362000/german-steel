@@ -86,13 +86,13 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.guptapayal.Icon'
+    namespace "com.germansteel.sales"
     defaultConfig {
-        applicationId 'com.guptapayal.Icon'
+        applicationId "com.germansteel.sales"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0.2"
+        versionName "1.0"
     }
     signingConfigs {
         debug {

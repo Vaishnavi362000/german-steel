@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState } from 'react';
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -67,7 +68,7 @@ const AddComplaintScreen = ({ route }) => {
                 };
 
                 const response = await axios.post(
-                    'https://api.gajkesaristeels.in/task/create',
+                    `${API_BASE_URL}/task/create`,
                     newComplaint,
                     {
                         headers: {
@@ -115,7 +116,7 @@ const AddComplaintScreen = ({ route }) => {
             });
 
             const response = await axios.put(
-                `https://api.gajkesaristeels.in/task/uploadFile?id=${taskId}&tag=check-in`,
+                `${API_BASE_URL}/task/uploadFile?id=${taskId}&tag=check-in`,
                 formData,
                 {
                     headers: {

@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState } from 'react';
 import {
     View, Text, TouchableOpacity, StyleSheet, TextInput, Modal, FlatList, Platform, ScrollView, KeyboardAvoidingView, Alert, ActivityIndicator
@@ -72,7 +73,7 @@ const CreateVisitModal = ({ isVisible, onClose, onCreateVisit, authToken }) => {
         setIsCreating(true);
         try {
             const employeeId = await AsyncStorage.getItem('employeeId');
-            const response = await axios.post('https://api.gajkesaristeels.in/store/create', {
+            const response = await axios.post(`${API_BASE_URL}/store/create`, {
                 ...newStoreDetails,
                 employeeId: employeeId,
             });
@@ -355,6 +356,15 @@ const styles = StyleSheet.create({
         padding: 20,
         maxHeight: '80%',
     },
+    modalKeyboardView: {
+        flex: 1,
+        width: '100%',
+        justifyContent: 'flex-end',
+    },
+    modalScrollContent: {
+        flexGrow: 1,
+        paddingBottom: 120,
+    },
     modalHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -370,6 +380,9 @@ const styles = StyleSheet.create({
     },
     storeSection: {
         marginBottom: 20,
+    },
+    storeSectionContent: {
+        paddingBottom: 72,
     },
     sectionTitle: {
         fontSize: 18,
@@ -470,13 +483,13 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         alignItems: 'center',
     },
+    buttonDisabled: {
+        opacity: 0.55,
+    },
     createButtonText: {
         color: '#fff',
         fontSize: 18,
         fontWeight: 'bold',
-    },
-    buttonDisabled: {
-        backgroundColor: '#9CA3AF',
     },
     inputContainer: {
         marginBottom: 20,
@@ -498,7 +511,7 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         flexGrow: 1,
-        paddingBottom: 20,
+        paddingBottom: 96,
     },
     backButton: {
         marginRight: 10,

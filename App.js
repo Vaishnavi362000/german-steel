@@ -1,10 +1,13 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
 
 // Import your screens
@@ -161,7 +164,7 @@ const App = () => {
       try {
         // Expo Go doesn't support expo-updates APIs like checkForUpdateAsync.
         // In real builds, this is enabled (if expo-updates is configured).
-        if (!Updates.isEnabled) return;
+        if (__DEV__ || !Updates.isEnabled) return;
 
         const { isAvailable } = await Updates.checkForUpdateAsync();
         if (isAvailable) {
@@ -188,7 +191,7 @@ const App = () => {
         const token = await AsyncStorage.getItem('userToken');
         if (token) {
           const response = await axios.get(
-            'https://api.gajkesaristeels.in/employee/getById?id=1',
+            `${API_BASE_URL}/employee/getById?id=1`,
             {
               headers: {
                 Authorization: `Bearer ${token}`,
@@ -234,24 +237,36 @@ const App = () => {
   }
 
   return (
-    <NavigationContainer>
-      {!authToken ? (
-        <AuthStackScreen onLoginSuccess={handleLoginSuccess} />
-      ) : (
-        <Tab.Navigator tabBar={(props) => <CustomTabBar {...props} />}>
-          <Tab.Screen name="Home" options={{ headerShown: false, tabBarIconName: 'home-outline' }}>
-            {() => <HomeStackScreen authToken={authToken} employeeId={employeeId} handleLogout={handleLogout} />}
-          </Tab.Screen>
-          <Tab.Screen name="Visits" options={{ headerShown: false, tabBarIconName: 'list-outline' }}>
-            {() => <VisitsStackScreen authToken={authToken} employeeId={employeeId} />}
-          </Tab.Screen>
-          <Tab.Screen name="Customer" options={{ headerShown: false, tabBarIconName: 'people-outline' }}>
-            {() => <CustomerStackScreen authToken={authToken} employeeId={employeeId} />}
-          </Tab.Screen>
-        </Tab.Navigator>
-      )}
-    </NavigationContainer>
+    <SafeAreaProvider>
+      <StatusBar style="dark" backgroundColor="#FFFFFF" translucent={false} />
+      <SafeAreaView style={styles.appShell} edges={['top']}>
+        <NavigationContainer>
+          {!authToken ? (
+            <AuthStackScreen onLoginSuccess={handleLoginSuccess} />
+          ) : (
+            <Tab.Navigator tabBar={(props) => <CustomTabBar {...props} />}>
+              <Tab.Screen name="Home" options={{ headerShown: false, tabBarIconName: 'home-outline' }}>
+                {() => <HomeStackScreen authToken={authToken} employeeId={employeeId} handleLogout={handleLogout} />}
+              </Tab.Screen>
+              <Tab.Screen name="Visits" options={{ headerShown: false, tabBarIconName: 'list-outline' }}>
+                {() => <VisitsStackScreen authToken={authToken} employeeId={employeeId} />}
+              </Tab.Screen>
+              <Tab.Screen name="Customer" options={{ headerShown: false, tabBarIconName: 'people-outline' }}>
+                {() => <CustomerStackScreen authToken={authToken} employeeId={employeeId} />}
+              </Tab.Screen>
+            </Tab.Navigator>
+          )}
+        </NavigationContainer>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 };
+
+const styles = StyleSheet.create({
+  appShell: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+});
 
 export default App;

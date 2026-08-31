@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-const Greeting = ({ firstName, message, onProfilePress, onNotificationPress, connectivityComponent }) => {
+const Greeting = ({ firstName, message, onProfilePress, onNotificationPress, connectivityComponent, unreadTasks = 0 }) => {
   const initial = firstName ? firstName.charAt(0).toUpperCase() : '';
 
   return (
@@ -18,6 +18,11 @@ const Greeting = ({ firstName, message, onProfilePress, onNotificationPress, con
           <View style={styles.iconsContainer}>
             <TouchableOpacity onPress={onNotificationPress} style={styles.iconButton}>
               <Ionicons name="notifications-outline" size={24} color="#1F2937" />
+              {unreadTasks > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unreadTasks > 99 ? '99+' : unreadTasks}</Text>
+                </View>
+              )}
             </TouchableOpacity>
             <TouchableOpacity onPress={onProfilePress} style={styles.iconButton}>
               <Ionicons name="person-outline" size={24} color="#1F2937" />
@@ -65,7 +70,7 @@ const styles = {
   greetingContainer: {
     marginBottom: 20,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 4,
   },
   headerRow: {
     flexDirection: 'row',
@@ -99,6 +104,24 @@ const styles = {
   iconButton: {
     marginLeft: 15,
     padding: 5,
+    position: 'relative',
+  },
+  badge: {
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    borderRadius: 10,
+    height: 20,
+    justifyContent: 'center',
+    minWidth: 20,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -4,
+    top: -4,
+  },
+  badgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
   },
   greetingTextContainer: {
     marginTop: 16,

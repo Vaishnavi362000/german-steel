@@ -1,18 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from './config/api';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, Text, TouchableOpacity, FlatList, TextInput, 
-  StyleSheet, Alert, ScrollView, ActivityIndicator, Modal 
+  StyleSheet, ScrollView, ActivityIndicator, Modal
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
+import { localPricingDate, isValidPricingAmount, hasPricingBrand } from './utils/pricingValidation';
 
 const DateRangeSelector = ({ dateRange, onDateRangeChange }) => {
   const [isCalendarVisible, setCalendarVisible] = useState(false);
   const [tempDate, setTempDate] = useState(dateRange?.start);
-  const today = new Date().toISOString().split('T')[0];
+  const today = localPricingDate();
 
   const applyDate = () => {
     const d = tempDate || today;
@@ -20,16 +22,16 @@ const DateRangeSelector = ({ dateRange, onDateRangeChange }) => {
     setCalendarVisible(false);
   };
 
-  const formatted = new Date(dateRange.start).toLocaleDateString();
+  const formatted = new Date(`${dateRange.start}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
   return (
     <View style={styles.dateRangeSelectorContainer}>
-      <TouchableOpacity style={styles.dateRangeButton} onPress={() => setCalendarVisible(true)}>
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Pricing date: ${formatted}`} style={styles.dateRangeButton} onPress={() => { setTempDate(dateRange.start); setCalendarVisible(true); }}>
         <Ionicons name="calendar-outline" size={24} color="#6C63FF" />
         <Text style={styles.dateRangeText}>{formatted}</Text>
       </TouchableOpacity>
 
-      <Modal visible={isCalendarVisible} transparent animationType="slide">
+      <Modal visible={isCalendarVisible} transparent animationType="slide" onRequestClose={() => setCalendarVisible(false)}>
         <View style={styles.modalContainer}>
           <View style={styles.calendarContainer}>
             <Calendar
@@ -57,11 +59,17 @@ const DateRangeSelector = ({ dateRange, onDateRangeChange }) => {
 
 const PricingScreen = ({ authToken }) => {
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
+  const submitLock = useRef(false);
+  const fetchSequence = useRef(0);
+  const [loadError, setLoadError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [pricingData, setPricingData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [dateRange, setDateRange] = useState({ 
-    start: new Date().toISOString().split('T')[0], 
-    end: new Date().toISOString().split('T')[0] 
+    start: localPricingDate(),
+    end: localPricingDate()
   });
   const [isBottomSheetOpen, setIsBottomSheetOpen] = useState(false);
   const [brandName, setBrandName] = useState('');
@@ -73,13 +81,23 @@ const PricingScreen = ({ authToken }) => {
   const [otherBrand, setOtherBrand] = useState('');
 
   const brands = [
-    'Gajkesari', 'SRJ', 'Metaroll', 'Rajuri', 'Kalika', 'Polaad', 
-    'Uma', 'Shakti gold', 'GSPL', 'Roopam', 'Others'
+    ...[
+      'Gajkesari', 'SRJ', 'Metaroll', 'Rajuri', 'Kalika', 'Polaad',
+      'Uma', 'Shakti gold', 'GSPL', 'Roopam',
+    ].sort((left, right) => left.localeCompare(right, 'en', { sensitivity: 'base' })),
+    'Others',
   ];
 
   useEffect(() => {
-    fetchPricingData();
-  }, [dateRange]);
+    if (isFocused) fetchPricingData();
+    return () => { fetchSequence.current += 1; };
+  }, [dateRange, authToken, isFocused]);
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const timeout = setTimeout(() => setSuccessMessage(''), 3000);
+    return () => clearTimeout(timeout);
+  }, [successMessage]);
 
   // When modal opens, show brand selection if no brand is selected
   useEffect(() => {
@@ -91,18 +109,16 @@ const PricingScreen = ({ authToken }) => {
   }, [isBottomSheetOpen]);
 
   const fetchPricingData = async () => {
+    const sequence = ++fetchSequence.current;
     setIsLoading(true);
+    setLoadError('');
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       
-      if (!authToken) {
-        console.error('Auth token not found');
-        setPricingData([]);
-        return;
-      }
+      if (!authToken || !employeeId) throw new Error('Please sign in again to view pricing.');
       
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/brand/getByDateRangeForEmployee?start=${dateRange.start}&end=${dateRange.end}&id=${employeeId}`,
+        `${API_BASE_URL}/brand/getByDateRangeForEmployee?start=${dateRange.start}&end=${dateRange.end}&id=${employeeId}`,
         {
           headers: { Authorization: `Bearer ${authToken}` },
         }
@@ -112,18 +128,15 @@ const PricingScreen = ({ authToken }) => {
       const isHtmlResponse = typeof response.data === 'string' && 
         (response.data.includes('<!DOCTYPE html>') || response.data.includes('<html>'));
       
-      if (isHtmlResponse) {
-        console.log('⚠️ [PRICING] Server returned HTML instead of JSON');
-        setPricingData([]);
-        return;
-      }
-      
-      setPricingData(Array.isArray(response.data) ? response.data : []);
+      if (isHtmlResponse || !Array.isArray(response.data)) throw new Error('Unexpected pricing response. Please try again.');
+      if (sequence === fetchSequence.current) setPricingData(response.data);
     } catch (error) {
-      console.error('Error fetching pricing data:', error);
-      setPricingData([]);
+      if (sequence === fetchSequence.current) {
+        setPricingData([]);
+        setLoadError('Could not load pricing. Please try again.');
+      }
     } finally {
-      setIsLoading(false);
+      if (sequence === fetchSequence.current) setIsLoading(false);
     }
   };
 
@@ -132,16 +145,32 @@ const PricingScreen = ({ authToken }) => {
   };
 
   const handleSubmitPricing = async () => {
+    if (submitLock.current) return;
+    setSubmitError('');
     if (!validateForm()) return;
-
+    if (dateRange.start !== localPricingDate()) {
+      setSubmitError('Prices can only be added for today. Close this form and select today.');
+      return;
+    }
+    submitLock.current = true;
     setIsSubmitting(true);
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
+      if (!authToken || !employeeId) throw new Error('Please sign in again.');
+      // Recheck today's records before saving, including prices added on another device.
+      const existing = await axios.get(`${API_BASE_URL}/brand/getByDateRangeForEmployee?start=${localPricingDate()}&end=${localPricingDate()}&id=${employeeId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!Array.isArray(existing.data)) throw new Error('Could not check existing prices. Please try again.');
+      if (hasPricingBrand(existing.data, brandName)) {
+        setBrandNameError('A price for this brand has already been added today.');
+        return;
+      }
       const response = await axios.post(
-        'https://api.gajkesaristeels.in/brand/create',
+        `${API_BASE_URL}/brand/create`,
         {
           brandName: brandName.trim(),
-          price: parseFloat(price),
+          price: Number(price),
           employeeDto: { id: employeeId },
         },
         {
@@ -155,7 +184,7 @@ const PricingScreen = ({ authToken }) => {
       
       if (isHtmlResponse) {
         console.log('⚠️ [PRICING] Server returned HTML instead of JSON');
-        Alert.alert('Error', 'Authentication issue. Please try logging in again.');
+        setSubmitError('Authentication issue. Please sign in again.');
         return;
       }
 
@@ -163,12 +192,15 @@ const PricingScreen = ({ authToken }) => {
         setBrandName('');
         setPrice('');
         setIsBottomSheetOpen(false);
+        setSuccessMessage('Price added successfully.');
         fetchPricingData();
+      } else {
+        setSubmitError('The server did not confirm the save. Check the list before trying again.');
       }
     } catch (error) {
-      console.error('Error adding pricing:', error);
-      Alert.alert('Error', 'Failed to add pricing. Please try again.');
+      setSubmitError('Could not save the price. Check your connection and try again.');
     } finally {
+      submitLock.current = false;
       setIsSubmitting(false);
     }
   };
@@ -186,8 +218,8 @@ const PricingScreen = ({ authToken }) => {
     if (!price.trim()) {
       setPriceError('Price is required');
       isValid = false;
-    } else if (isNaN(parseFloat(price)) || parseFloat(price) <= 0) {
-      setPriceError('Please enter a valid price');
+    } else if (!isValidPricingAmount(price)) {
+      setPriceError('Enter a price greater than zero, with up to 2 decimal places.');
       isValid = false;
     } else {
       setPriceError('');
@@ -195,21 +227,10 @@ const PricingScreen = ({ authToken }) => {
 
     // Prevent adding price for the same brand twice on the same day
     // We only allow a single entry per brand per selected date (dateRange.start)
-    const normalizedNewBrand = brandName.trim().toLowerCase();
-    const hasDuplicateForDay = Array.isArray(pricingData)
-      ? pricingData.some(
-          (item) =>
-            item?.brandName &&
-            item.brandName.toLowerCase() === normalizedNewBrand
-        )
-      : false;
+    const hasDuplicateForDay = hasPricingBrand(pricingData, brandName);
 
     if (hasDuplicateForDay) {
       setBrandNameError('You have already added a price for this brand today');
-      Alert.alert(
-        'Duplicate entry',
-        'You have already added a price for this brand for the selected date.'
-      );
       isValid = false;
     }
 
@@ -238,6 +259,7 @@ const PricingScreen = ({ authToken }) => {
   );
 
   const handleSelectBrand = (brand) => {
+    setBrandNameError('');
     if (brand === 'Others') {
       setView('addOtherBrand');
     } else {
@@ -254,7 +276,7 @@ const PricingScreen = ({ authToken }) => {
       setOtherBrand('');
       setView('main');
     } else {
-      Alert.alert('Error', 'Please enter a brand name');
+      setBrandNameError('Enter a brand name.');
     }
   };
 
@@ -266,50 +288,57 @@ const PricingScreen = ({ authToken }) => {
     setBrandNameError('');
     setPriceError('');
     setOtherBrand('');
+    setSubmitError('');
     setView('selectBrand');
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButtonHeader} onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={24} color="#333" />
+        <TouchableOpacity
+          style={styles.backButtonHeader}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color="#6C63FF" />
         </TouchableOpacity>
         <Text style={styles.title}>Pricing</Text>
+        <View style={styles.headerSpacer} />
       </View>
-      <DateRangeSelector
-        dateRange={dateRange}
-        onDateRangeChange={handleDateRangeChange}
-      />
-      {isLoading ? (
-        <ActivityIndicator size="large" color="#6C63FF" />
-      ) : (
-        <FlatList
-          data={pricingData}
-          renderItem={renderPricingItem}
-          keyExtractor={(item) => item.id.toString()}
-          ListEmptyComponent={<Text style={styles.emptyText}>No pricing data available</Text>}
-          contentContainerStyle={styles.listContent}
+      <View style={styles.content}>
+        <DateRangeSelector
+          dateRange={dateRange}
+          onDateRangeChange={handleDateRangeChange}
         />
-      )}
-      {(() => {
-        const today = new Date().toISOString().split('T')[0];
-        const isTodaySelected = dateRange.start === today;
-        if (!isTodaySelected) {
+        {successMessage ? <Text accessibilityRole="alert" style={{ color: '#047857', paddingHorizontal: 16, marginBottom: 12 }}>{successMessage}</Text> : null}
+        {loadError ? <View style={{ padding: 16 }}>
+          <Text accessibilityRole="alert" style={styles.errorText}>{loadError}</Text>
+          <TouchableOpacity accessibilityRole="button" onPress={fetchPricingData}><Text style={styles.price}>Retry</Text></TouchableOpacity>
+        </View> : null}
+        {isLoading ? (
+          <ActivityIndicator style={styles.loadingIndicator} size="large" color="#6C63FF" />
+        ) : (
+          <FlatList
+            style={styles.pricingList}
+            data={pricingData}
+            renderItem={renderPricingItem}
+            keyExtractor={(item) => item.id.toString()}
+            ListEmptyComponent={!loadError ? <Text style={styles.emptyText}>No prices recorded for this date.</Text> : null}
+            contentContainerStyle={styles.listContent}
+          />
+        )}
+        {(() => {
+          const today = localPricingDate();
+          if (dateRange.start !== today) return null;
           return (
-            null
+            <TouchableOpacity style={styles.addButton} onPress={() => setIsBottomSheetOpen(true)}>
+              <Ionicons name="add" size={20} color="white" />
+              <Text style={styles.addButtonText}>Add Pricing</Text>
+            </TouchableOpacity>
           );
-        }
-        return (
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => setIsBottomSheetOpen(true)}
-          >
-            <Ionicons name="add" size={24} color="white" />
-            <Text style={styles.addButtonText}>Add Pricing</Text>
-          </TouchableOpacity>
-        );
-      })()}
+        })()}
+      </View>
 
       <Modal
         visible={isBottomSheetOpen}
@@ -337,7 +366,9 @@ const PricingScreen = ({ authToken }) => {
                     <Text style={styles.brandSelectorText}>{brandName || 'Select Brand'}</Text>
                     <Ionicons name="chevron-forward" size={24} color="#6C63FF" />
                   </TouchableOpacity>
+                  {brandNameError ? <Text accessibilityRole="alert" style={styles.errorText}>{brandNameError}</Text> : null}
                   {renderInputField('Price per ton', price, setPrice, priceError, 'Enter price', 'numeric')}
+                  {submitError ? <Text accessibilityRole="alert" style={styles.errorText}>{submitError}</Text> : null}
                 </>
               )}
               {view === 'selectBrand' && (
@@ -377,7 +408,7 @@ const PricingScreen = ({ authToken }) => {
                       <Ionicons name="close" size={24} color="#333" />
                     </TouchableOpacity>
                   </View>
-                  {renderInputField('Brand Name', otherBrand, setOtherBrand, '', 'Enter brand name')}
+                  {renderInputField('Brand Name', otherBrand, setOtherBrand, brandNameError, 'Enter brand name')}
                   <TouchableOpacity style={styles.submitButton} onPress={handleAddOtherBrand}>
                     <Text style={styles.submitButtonText}>Add Brand</Text>
                   </TouchableOpacity>
@@ -407,78 +438,103 @@ const PricingScreen = ({ authToken }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
   backButtonHeader: {
-    padding: 8,
-    marginRight: 8,
+    width: 40,
+    height: 40,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  headerSpacer: {
+    width: 40,
+    height: 40,
+  },
+  content: {
+    flex: 1,
+    paddingTop: 14,
+    backgroundColor: '#FFFFFF',
   },
   dateRangeSelectorContainer: {
-    marginBottom: 16,
+    marginBottom: 12,
     paddingHorizontal: 16,
   },
   dateRangeButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f2f2f2',
-    borderRadius: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    backgroundColor: '#F1F2F4',
+    borderRadius: 12,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
   },
   dateRangeText: {
-    fontSize: 16,
+    fontSize: 14,
+    fontWeight: '600',
     marginLeft: 8,
     color: '#333',
   },
   pricingItem: {
-    backgroundColor: '#f0f0f0',
-    padding: 15,
+    backgroundColor: '#F1F2F4',
+    padding: 14,
     borderRadius: 10,
-    marginBottom: 10,
+    marginBottom: 12,
   },
   brandName: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
   },
   price: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#6C63FF',
   },
   emptyText: {
     textAlign: 'center',
-    marginTop: 20,
-    fontSize: 16,
-    color: 'gray',
+    marginTop: 32,
+    fontSize: 14,
+    color: '#6B7280',
   },
   listContent: {
     paddingHorizontal: 16,
+    paddingBottom: 16,
+    flexGrow: 1,
+  },
+  pricingList: {
+    flex: 1,
+  },
+  loadingIndicator: {
+    flex: 1,
   },
   addButton: {
     backgroundColor: '#6C63FF',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 15,
-    borderRadius: 10,
-    marginTop: 20,
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 12,
     marginHorizontal: 16,
     marginBottom: 20,
   },
   addButtonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 14,
+    fontWeight: '700',
     marginLeft: 10,
   },
   modalBackground: {

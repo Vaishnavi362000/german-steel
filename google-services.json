@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "742951676506",
+    "project_id": "german-steels",
+    "storage_bucket": "german-steels.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:742951676506:android:2526e9db1a7d98a8dec663",
+        "android_client_info": {
+          "package_name": "com.germansteel.sales"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuWTHcihn1UBYgTOcy___Fvqwe4SzG-5Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

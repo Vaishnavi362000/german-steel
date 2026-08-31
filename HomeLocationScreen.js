@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, SafeAreaView, Linking } from 'react-native';
 import axios from 'axios';
@@ -18,7 +19,7 @@ const HomeLocationScreen = ({ route, navigation }) => {
     const fetchLocationData = async () => {
       try {
         const employeeId = await AsyncStorage.getItem('employeeId');
-        const response = await axios.get(`https://api.gajkesaristeels.in/employee/getById?id=${employeeId}`, {
+        const response = await axios.get(`${API_BASE_URL}/employee/getById?id=${employeeId}`, {
           headers: {
             Authorization: `Bearer ${authToken}`,
           },
@@ -47,7 +48,7 @@ const HomeLocationScreen = ({ route, navigation }) => {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/employee/edit?empId=${employeeId}`,
+        `${API_BASE_URL}/employee/edit?empId=${employeeId}`,
         {
           houseLatitude: currentLocation.latitude,
           houseLongitude: currentLocation.longitude
@@ -74,7 +75,7 @@ const HomeLocationScreen = ({ route, navigation }) => {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/employee/edit?empId=${employeeId}`,
+        `${API_BASE_URL}/employee/edit?empId=${employeeId}`,
         {
           houseLatitude: 0,
           houseLongitude: 0
@@ -106,10 +107,10 @@ const HomeLocationScreen = ({ route, navigation }) => {
       console.log('Getting current location...');
       const location = await getMobileActionLocation({
         requirePrecise: false,
-        timeoutMs: 15000,
-        cacheMaxAgeMs: 120000,
-        cacheRequiredAccuracy: 200,
-        balancedRequiredAccuracy: 200,
+        timeoutMs: 60000,
+        cacheMaxAgeMs: 300000,
+        cacheRequiredAccuracy: 1000,
+        balancedRequiredAccuracy: 1000,
       });
 
       if (!location || !location.coords) {
@@ -126,7 +127,7 @@ const HomeLocationScreen = ({ route, navigation }) => {
       
       console.log('Making API call to update location...');
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/employee/edit?empId=${employeeId}`,
+        `${API_BASE_URL}/employee/edit?empId=${employeeId}`,
         {
           houseLatitude: location.coords.latitude,
           houseLongitude: location.coords.longitude
@@ -154,8 +155,11 @@ const HomeLocationScreen = ({ route, navigation }) => {
         throw new Error('Failed to set location');
       }
     } catch (error) {
-      console.error('Error in getCurrentLocation:', error);
       if (error?.isLocationError || error?.code?.startsWith?.('location_') || error?.code === 'permission_denied') {
+        console.warn('Home location could not be updated:', {
+          code: error?.code || 'location_unavailable',
+          message: error?.message || String(error),
+        });
         const content = getMobileLocationErrorContent(error, 'set home location');
         const buttons = content.canOpenSettings
           ? [
@@ -165,6 +169,7 @@ const HomeLocationScreen = ({ route, navigation }) => {
           : [{ text: 'OK' }];
         Alert.alert(content.title, content.message, buttons);
       } else {
+        console.error('Error updating home location:', error);
         Alert.alert(
           'Error',
           error.message || 'Failed to set home location. Please try again.'
@@ -177,8 +182,18 @@ const HomeLocationScreen = ({ route, navigation }) => {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#6C63FF" />
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} accessibilityLabel="Go back">
+            <Ionicons name="arrow-back" size={24} color="#6C63FF" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Home Location</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#6C63FF" />
+          <Text style={styles.loadingText}>Loading home location...</Text>
+        </View>
       </View>
     );
   }
@@ -187,9 +202,10 @@ const HomeLocationScreen = ({ route, navigation }) => {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={24} color="#333" />
+          <Ionicons name="arrow-back" size={24} color="#6C63FF" />
         </TouchableOpacity>
-        <Text style={styles.title}>Home Location</Text>
+        <Text style={styles.headerTitle}>Home Location</Text>
+        <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.content}>
@@ -201,12 +217,18 @@ const HomeLocationScreen = ({ route, navigation }) => {
               </View>
               <Text style={styles.locationTitle}>Current Home Location</Text>
               <View style={styles.coordinatesContainer}>
-                <Text style={styles.coordinatesText}>
-                  Latitude: {currentLocation.latitude != null ? Number(currentLocation.latitude).toFixed(6) : 'N/A'}
-                </Text>
-                <Text style={styles.coordinatesText}>
-                  Longitude: {currentLocation.longitude != null ? Number(currentLocation.longitude).toFixed(6) : 'N/A'}
-                </Text>
+                <View style={styles.coordinateRow}>
+                  <Text style={styles.coordinateLabel}>Latitude</Text>
+                  <Text style={styles.coordinateValue}>
+                    {currentLocation.latitude != null ? Number(currentLocation.latitude).toFixed(6) : 'N/A'}
+                  </Text>
+                </View>
+                <View style={styles.coordinateRow}>
+                  <Text style={styles.coordinateLabel}>Longitude</Text>
+                  <Text style={styles.coordinateValue}>
+                    {currentLocation.longitude != null ? Number(currentLocation.longitude).toFixed(6) : 'N/A'}
+                  </Text>
+                </View>
               </View>
             </View>
 
@@ -270,26 +292,40 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingText: {
+    color: '#6B7280',
+    fontSize: 14,
+    marginTop: 10,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
   backButton: {
-    padding: 8,
-    marginRight: 8,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  title: {
+  headerTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
+    fontWeight: '700',
+    color: '#1F2937',
+    textAlign: 'center',
+  },
+  headerSpacer: {
+    width: 40,
+    height: 40,
   },
   content: {
     flex: 1,
-    padding: 20,
+    padding: 16,
   },
   locationInfo: {
     alignItems: 'center',
@@ -305,8 +341,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   locationTitle: {
-    fontSize: 20,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '700',
     color: '#1F2937',
     marginBottom: 16,
   },
@@ -316,10 +352,21 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     width: '100%',
   },
-  coordinatesText: {
-    fontSize: 16,
+  coordinateRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 28,
+  },
+  coordinateLabel: {
+    fontSize: 13,
     color: '#4B5563',
-    marginBottom: 8,
+    fontWeight: '500',
+  },
+  coordinateValue: {
+    color: '#1F2937',
+    fontSize: 14,
+    fontWeight: '700',
   },
   buttonGroup: {
     gap: 12,
@@ -328,7 +375,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 16,
+    padding: 14,
     borderRadius: 12,
     marginBottom: 12,
   },
@@ -346,8 +393,8 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
     marginLeft: 8,
   },
   emptyState: {
@@ -357,13 +404,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   emptyStateTitle: {
-    fontSize: 20,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '700',
     color: '#1F2937',
     marginBottom: 8,
   },
   emptyStateSubtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#6B7280',
     textAlign: 'center',
     marginBottom: 24,

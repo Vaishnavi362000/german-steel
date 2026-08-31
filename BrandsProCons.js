@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
@@ -15,7 +16,7 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
 
   const fetchBrandsProCons = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/visit/getProCons?visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/visit/getProCons?visitId=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       setBrandsProCons(response.data);
@@ -45,7 +46,7 @@ const BrandsProCons = ({ visitId, authToken, onBrandAdded, readOnly, onClose }) 
 
     try {
       setIsAdding(true);
-      await axios.put(`https://api.gajkesaristeels.in/visit/addProCons?visitId=${visitId}`, payload, {
+      await axios.put(`${API_BASE_URL}/visit/addProCons?visitId=${visitId}`, payload, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const updatedBrands = await fetchBrandsProCons();

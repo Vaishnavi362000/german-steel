@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../config/api';
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Modal, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,8 +42,11 @@ const AddCustomerModal = ({ isVisible, onClose, authToken, onCustomerCreated }) 
 
     setIsCreating(true);
     
+    let requestStage = 'checking whether the store already exists';
+
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/store/getByPhone?phone=${primaryContact}`, {
+      const lookupUrl = `${API_BASE_URL}/store/getByPhone?phone=${encodeURIComponent(primaryContact)}`;
+      const response = await axios.get(lookupUrl, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -61,7 +65,9 @@ const AddCustomerModal = ({ isVisible, onClose, authToken, onCustomerCreated }) 
         delete payload.village;
         delete payload.taluka;
 
-        const createResponse = await axios.post('https://api.gajkesaristeels.in/store/create', payload, {
+        requestStage = 'creating the store';
+        const createUrl = `${API_BASE_URL}/store/create`;
+        const createResponse = await axios.post(createUrl, payload, {
           headers: {
             Authorization: `Bearer ${authToken}`,
           },
@@ -72,7 +78,14 @@ const AddCustomerModal = ({ isVisible, onClose, authToken, onCustomerCreated }) 
         onCustomerCreated(newCustomerId);
       }
     } catch (error) {
-      console.error('Error creating customer:', error);
+      console.error('Error creating store:', {
+        stage: requestStage,
+        status: error.response?.status,
+        response: error.response?.data,
+        method: error.config?.method?.toUpperCase(),
+        url: error.config?.url,
+        message: error.message,
+      });
       Alert.alert('Error', 'An error occurred while creating the customer. Please try again.');
     } finally {
       setIsCreating(false);

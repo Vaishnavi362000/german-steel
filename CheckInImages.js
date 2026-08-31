@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,7 +19,16 @@ import { ConnectivityStatusIcons } from './components/ConnectivityStatus';
 
 const { width, height } = Dimensions.get('window');
 
-const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
+const CheckInImages = ({
+  visitId,
+  authToken,
+  onImageAdded,
+  isDisabled,
+  imageTag = 'check-in',
+  actionLabel = 'Add Check-In Image',
+  permissionLabel = 'check-in image',
+  showConnectivity = true,
+}) => {
   const cameraRef = useRef(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -53,7 +63,7 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
 
         Alert.alert(
           'Camera Permission Required',
-          'Camera permission is required to capture check-in images.',
+          `Camera permission is required to capture the ${permissionLabel}.`,
           buttons
         );
         return false;
@@ -139,14 +149,17 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
     const tryUpload = async () => {
       try {
         const formData = new FormData();
+        const timestamp = new Date().getTime();
+        const dynamicFileName = `visit_${visitId}_${imageTag}_${timestamp}.jpg`.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        
         formData.append('file', {
           uri: imageUri,
-          name: 'image.jpg',
+          name: dynamicFileName,
           type: 'image/jpeg',
         });
 
         await axios.put(
-          `https://api.gajkesaristeels.in/visit/uploadFile?id=${visitId}&tag=check-in`,
+          `${API_BASE_URL}/visit/uploadFile?id=${visitId}&tag=${encodeURIComponent(imageTag)}`,
           formData,
           {
             headers: {
@@ -227,12 +240,14 @@ const CheckInImages = ({ visitId, authToken, onImageAdded, isDisabled }) => {
             <Icon name="camera" size={24} color="#FFFFFF" />
           )}
           <Text style={styles.actionText}>
-            {isOpeningCamera ? 'Opening Camera...' : 'Add Check-In Images'}
+            {isOpeningCamera ? 'Opening Camera...' : actionLabel}
           </Text>
         </View>
-        <View style={styles.connectivityContainer}>
-          <ConnectivityStatusIcons />
-        </View>
+        {showConnectivity && (
+          <View style={styles.connectivityContainer}>
+            <ConnectivityStatusIcons />
+          </View>
+        )}
       </TouchableOpacity>
 
       {isCameraOpen && (

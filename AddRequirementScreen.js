@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState } from 'react';
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -64,7 +65,7 @@ const AddRequirementScreen = ({ route }) => {
                 };
 
                 const response = await axios.post(
-                    'https://api.gajkesaristeels.in/task/create',
+                    `${API_BASE_URL}/task/create`,
                     newRequirement,
                     {
                         headers: {

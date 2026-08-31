@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
@@ -14,12 +15,21 @@ const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
 
   const fetchRequirements = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/task/getByVisit?type=requirement&visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/task/getByVisit?type=requirement&visitId=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const filteredRequirements = Array.isArray(response.data)
         ? response.data.filter(task => task && task.taskType === 'requirement')
         : [];
+      console.log('[Requirements] getByVisit response', {
+        visitId,
+        count: filteredRequirements.length,
+        requirements: filteredRequirements.map((task) => ({
+          id: task.id,
+          taskTitle: task.taskTitle,
+          hasDescription: Boolean(task.taskDesciption || task.taskDescription),
+        })),
+      });
       setRequirements(filteredRequirements);
     } catch (error) {
       console.error('Error fetching requirements:', error);
@@ -39,15 +49,31 @@ const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
 
     try {
       setIsAdding(true);
-      const response = await axios.post('https://api.gajkesaristeels.in/task/create', {
+      // The task API currently uses the legacy `taskDesciption` spelling.
+      // The standalone requirement flow already uses this field, so keeping the
+      // visit flow aligned ensures descriptions survive the create/read cycle.
+      const requirementPayload = {
         taskTitle: title.trim(),
-        taskDescription: description.trim(),
+        taskDesciption: description.trim(),
         visitId: visitId,
         taskType: 'requirement',
         status: 'Assigned',
         priority: 'low',
-      }, {
+      };
+
+      console.log('[Requirements] create request', {
+        visitId,
+        payload: requirementPayload,
+      });
+
+      const response = await axios.post(`${API_BASE_URL}/task/create`, requirementPayload, {
         headers: { Authorization: `Bearer ${authToken}` },
+      });
+
+      console.log('[Requirements] create response', {
+        visitId,
+        status: response.status,
+        data: response.data,
       });
 
       if (response.data) {
@@ -71,7 +97,7 @@ const Requirements = ({ visitId, authToken, onRequirementAdded, readOnly }) => {
   const renderRequirementItem = ({ item }) => (
     <View style={styles.requirementItem}>
       <Text style={styles.requirementTitle}>{item.taskTitle || 'No title'}</Text>
-      <Text style={styles.requirementDescription}>{item.taskDesciption || 'No description'}</Text>
+      <Text style={styles.requirementDescription}>{item.taskDesciption || item.taskDescription || 'No description'}</Text>
       <Text style={styles.requirementDate}>Added: {new Date(item.createdAt).toLocaleDateString()}</Text>
     </View>
   );

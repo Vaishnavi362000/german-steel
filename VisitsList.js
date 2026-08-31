@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View,
@@ -25,6 +26,9 @@ import CustomDatePicker from './CustomDatePicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
 import debounce from 'lodash.debounce';
+import { fetchEmployeeVisitsPage } from './utils/optimizedVisitApi';
+import { CLIENT_TYPE_OPTIONS } from './clientTypeOptions';
+import { applyMissingLocationDefaults, fetchEmployeeStoreLocationDefaults } from './utils/storeLocationPrefill';
 
 const VisitsList = ({ authToken }) => {
     const [visits, setVisits] = useState([]);
@@ -53,6 +57,7 @@ const VisitsList = ({ authToken }) => {
 
     const [currentPage, setCurrentPage] = useState(0);
     const [totalPages, setTotalPages] = useState(0);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const pageSize = 10;
 
@@ -65,6 +70,7 @@ const VisitsList = ({ authToken }) => {
         state: '',
         village: '',
         taluka: '',
+        yearOfJoining: '',
     });
 
     const [filters, setFilters] = useState({
@@ -78,6 +84,7 @@ const VisitsList = ({ authToken }) => {
     const [confirmationMessage, setConfirmationMessage] = useState('');
     const [isStoreLoading, setIsStoreLoading] = useState(false);
     const [isCreatingVisit, setIsCreatingVisit] = useState(false);
+    const [customerTypeFilter, setCustomerTypeFilter] = useState('all');
 
     const purposeOptions = [
         { label: 'First Visit', value: 'First Visit' },
@@ -88,15 +95,20 @@ const VisitsList = ({ authToken }) => {
         { label: 'Sales', value: 'Sales' },
         { label: 'Special Enquiry', value: 'Special Enquiry' },
         { label: 'Payment', value: 'Payment' },
+        { label: 'Gifting', value: 'Gifting' },
         { label: 'Others', value: 'Others' },
     ];
 
-    const fetchVisits = async () => {
+    const fetchVisits = async ({ page = 0, append = false } = {}) => {
         if (!authToken) return;
         
         try {
-            setLoading(true);
-            setError(null);
+            if (append) {
+                setIsLoadingMore(true);
+            } else {
+                setLoading(true);
+                setError(null);
+            }
             const formattedDate = format(selectedDate, 'yyyy-MM-dd');
             const employeeId = await AsyncStorage.getItem('employeeId');
             
@@ -104,21 +116,17 @@ const VisitsList = ({ authToken }) => {
                 throw new Error('Employee ID not found');
             }
 
-            const response = await fetch(
-                `https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`,
-                {
-                    headers: {
-                        Authorization: `Bearer ${authToken}`,
-                    },
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            const updatedVisits = data.map((visit) => {
+            const result = await fetchEmployeeVisitsPage({
+                employeeId,
+                start: formattedDate,
+                end: formattedDate,
+                page,
+                size: page === 0 ? 20 : 20,
+                sort: 'id,desc',
+                authToken,
+            });
+            const visitPage = result.page || {};
+            const updatedVisits = (Array.isArray(visitPage.content) ? visitPage.content : []).map((visit) => {
                 let visitStatus = 'Assigned';
                 if (visit.checkinLatitude && visit.checkinLongitude && visit.checkinDate && visit.checkinTime) {
                     visitStatus = 'Ongoing';
@@ -128,13 +136,27 @@ const VisitsList = ({ authToken }) => {
                 }
                 return { ...visit, status: visitStatus };
             });
-            setVisits(updatedVisits);
+            setVisits((previousVisits) => {
+                const combined = append ? [...previousVisits, ...updatedVisits] : updatedVisits;
+                return combined.filter((visit, index, all) => (
+                    all.findIndex((candidate) => candidate?.id === visit?.id) === index
+                ));
+            });
+            setCurrentPage(Number.isInteger(visitPage.number) ? visitPage.number : page);
+            setTotalPages(Math.max(Number(visitPage.totalPages || 1), 1));
         } catch (error) {
             console.error('Error fetching visits:', error);
-            setError(error.message);
-            setVisits([]);
+            if (!append) {
+                setError(error.message);
+                setVisits([]);
+                setTotalPages(0);
+            }
         } finally {
-            setLoading(false);
+            if (append) {
+                setIsLoadingMore(false);
+            } else {
+                setLoading(false);
+            }
         }
     };
 
@@ -157,12 +179,11 @@ const VisitsList = ({ authToken }) => {
 
     const handleSearch = (query) => {
         setSearchQuery(query);
-        setCurrentPage(0);
     };
 
     const handleLoadMore = () => {
-        if (currentPage < totalPages - 1) {
-            setCurrentPage(prev => prev + 1);
+        if (!loading && !isLoadingMore && currentPage < totalPages - 1) {
+            fetchVisits({ page: currentPage + 1, append: true });
         }
     };
 
@@ -178,7 +199,7 @@ const VisitsList = ({ authToken }) => {
             .filter((visit) => {
                 const { storeName, purpose } = visit;
                 return (
-                    storeName.toLowerCase().includes(filters.customerName.toLowerCase()) &&
+                    (storeName || '').toLowerCase().includes(filters.customerName.toLowerCase()) &&
                     (purpose ? purpose.toLowerCase().includes(filters.purpose.toLowerCase()) : true)
                 );
             })
@@ -202,10 +223,18 @@ const VisitsList = ({ authToken }) => {
         setSelectedStore(null);
         setStores([]);
         setStoreSearchText('');
+        setCustomerTypeFilter('all');
     };
 
-    const openCreateStoreModal = () => {
+    const openCreateStoreModal = async () => {
         setIsCreateStoreModalVisible(true);
+        try {
+            const employeeId = await AsyncStorage.getItem('employeeId');
+            const defaults = await fetchEmployeeStoreLocationDefaults({ employeeId, authToken });
+            setNewStoreDetails((current) => applyMissingLocationDefaults(current, defaults));
+        } catch (error) {
+            console.log('Inline store location prefill unavailable:', error?.message || error);
+        }
     };
 
     const closeCreateStoreModal = () => {
@@ -219,6 +248,7 @@ const VisitsList = ({ authToken }) => {
             state: '',
             village: '',
             taluka: '',
+            yearOfJoining: '',
         });
     };
 
@@ -243,7 +273,7 @@ const VisitsList = ({ authToken }) => {
             const employeeId = await AsyncStorage.getItem('employeeId');
             const formattedDate = format(newVisitDetails.date, 'yyyy-MM-dd');
             const response = await fetch(
-                `https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`,
+                `${API_BASE_URL}/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`,
                 {
                     headers: {
                         Authorization: `Bearer ${authToken}`,
@@ -282,7 +312,7 @@ const VisitsList = ({ authToken }) => {
         try {
             const employeeId = await AsyncStorage.getItem('employeeId');
             const purpose = newVisitDetails.purpose === 'Others' ? newVisitDetails.customPurpose : newVisitDetails.purpose;
-            const response = await axios.put('https://api.gajkesaristeels.in/visit/create', {
+            const response = await axios.put(`${API_BASE_URL}/visit/create`, {
                 storeId: selectedStore.storeId,
                 employeeId: employeeId,
                 visit_date: format(newVisitDetails.date, 'yyyy-MM-dd'),
@@ -432,9 +462,18 @@ const VisitsList = ({ authToken }) => {
     const handleCreateStore = async () => {
         try {
             const employeeId = await AsyncStorage.getItem('employeeId');
-            const response = await axios.post('https://api.gajkesaristeels.in/store/create', {
+            const payload = {
                 ...newStoreDetails,
                 employeeId: employeeId,
+                subDistrict: newStoreDetails.village,
+                district: newStoreDetails.taluka,
+                yearOfJoining: newStoreDetails.yearOfJoining ? Number(newStoreDetails.yearOfJoining) : undefined,
+            };
+            delete payload.village;
+            delete payload.taluka;
+            if (!payload.yearOfJoining) delete payload.yearOfJoining;
+            const response = await axios.post(`${API_BASE_URL}/store/create`, payload, {
+                headers: { Authorization: `Bearer ${authToken}` },
             });
 
             const storeId = response.data;
@@ -471,11 +510,11 @@ const VisitsList = ({ authToken }) => {
     const getStatusColor = (status) => {
         switch (status) {
             case 'Assigned':
-                return '#FCD34D';
+                return '#D97706';
             case 'Ongoing':
-                return '#60A5FA';
+                return '#2563EB';
             case 'Completed':
-                return '#4ADE80';
+                return '#059669';
             default:
                 return '#E5E7EB';
         }
@@ -494,7 +533,7 @@ const VisitsList = ({ authToken }) => {
                 throw new Error('Employee ID not found');
             }
 
-            const url = `https://api.gajkesaristeels.in/store/getByEmployeeWithSort?id=${employeeId}&storeName=${encodeURIComponent(searchText.trim())}&page=0&size=20&sortBy=storeName&sortOrder=asc`;
+            const url = `${API_BASE_URL}/store/getByEmployeeWithSort?id=${employeeId}&storeName=${encodeURIComponent(searchText.trim())}&page=0&size=20&sortBy=storeName&sortOrder=asc`;
 
             const response = await axios.get(url, {
                 headers: {
@@ -570,59 +609,80 @@ const VisitsList = ({ authToken }) => {
                 : `${duration.minutes()}m`
             : null;
 
-        const location = visit.village || visit.taluka || visit.city || 'N/A';
-
-        const handleLocationPress = () => {
-            const { storeLatitude, storeLongitude } = visit;
-            const url = Platform.select({
-                ios: `http://maps.apple.com/?daddr=${storeLatitude},${storeLongitude}`,
-                android: `http://maps.google.com/maps?daddr=${storeLatitude},${storeLongitude}`,
-            });
-
-            Linking.openURL(url);
-        };
-
         return (
             <TouchableOpacity
                 style={styles.card}
                 onPress={() =>
                     navigation.navigate('VisitScreen', { visitId: visit.id, authToken })
                 }
+                activeOpacity={0.86}
             >
                 <View style={styles.cardContent}>
                     <View style={styles.cardHeader}>
-                        <Text style={[styles.storeName, { fontWeight: 'bold' }]}>{visit.storeName}</Text>
+                        <View style={styles.visitIdentity}>
+                            <View style={styles.visitIconBox}>
+                                <Ionicons name="storefront-outline" size={20} color="#4F46E5" />
+                            </View>
+                            <View style={styles.cardTitleBlock}>
+                                <Text style={styles.storeName} numberOfLines={1}>{visit.storeName || 'Unnamed customer'}</Text>
+                                <Text style={styles.visitReference}>Visit #{visit.id}</Text>
+                            </View>
+                        </View>
                         <View style={[styles.statusContainer, { backgroundColor: getStatusColor(visit.status) }]}>
+                            <Ionicons
+                                name={visit.status === 'Completed' ? 'checkmark-circle' : visit.status === 'Ongoing' ? 'navigate-circle' : 'time-outline'}
+                                size={13}
+                                color="#FFFFFF"
+                            />
                             <Text style={styles.statusText}>{visit.status}</Text>
                         </View>
                     </View>
                     <View style={styles.visitDetails}>
                         <View style={styles.visitItem}>
-                            <Ionicons name="calendar-outline" size={20} color="#4B5563" />
-                            <Text style={styles.visitText}>{moment(visit.visit_date).format('DD MMM YYYY')}</Text>
+                            <View style={styles.visitMetaIcon}>
+                                <Ionicons name="calendar-outline" size={17} color="#4F46E5" />
+                            </View>
+                            <View>
+                                <Text style={styles.visitMetaLabel}>VISIT DATE</Text>
+                                <Text style={styles.visitText}>{moment(visit.visit_date).format('DD MMM YYYY')}</Text>
+                            </View>
                         </View>
                         <View style={styles.visitItem}>
-                            <Ionicons name="bookmark-outline" size={20} color="#4B5563" />
-                            <Text style={styles.visitText}>{visit.purpose || 'N/A'}</Text>
+                            <View style={styles.visitMetaIcon}>
+                                <Ionicons name="bookmark-outline" size={17} color="#4F46E5" />
+                            </View>
+                            <View>
+                                <Text style={styles.visitMetaLabel}>PURPOSE</Text>
+                                <Text style={styles.visitText} numberOfLines={1}>{visit.purpose || 'Not specified'}</Text>
+                            </View>
                         </View>
                     </View>
                     <View style={styles.cardFooter}>
-                        {formattedDuration && (
-                            <View style={styles.footerItem}>
-                                <Ionicons name="time-outline" size={16} color="#6B7280" />
-                                <Text style={styles.footerText}>{formattedDuration}</Text>
-                            </View>
-                        )}
-
-                        <View style={styles.footerItem}>
-                            <Ionicons name="person-outline" size={16} color="#6B7280" />
-                            <Text style={styles.footerText}>{visit.employeeName}</Text>
+                        <View style={styles.footerMeta}>
+                            {formattedDuration && (
+                                <View style={styles.footerItem}>
+                                    <Ionicons name="time-outline" size={16} color="#7C8494" />
+                                    <Text style={styles.footerText}>{formattedDuration}</Text>
+                                </View>
+                            )}
+                            {!!visit.employeeName && (
+                                <View style={styles.footerItem}>
+                                    <Ionicons name="person-outline" size={16} color="#7C8494" />
+                                    <Text style={styles.footerText} numberOfLines={1}>{visit.employeeName}</Text>
+                                </View>
+                            )}
                         </View>
+                        <Ionicons name="chevron-forward" size={19} color="#4F46E5" />
                     </View>
                 </View>
             </TouchableOpacity>
         );
     };
+
+    const visibleStores = stores.filter((store) => {
+        if (customerTypeFilter === 'all') return true;
+        return String(store.clientType || '').trim().toLowerCase() === customerTypeFilter;
+    });
 
     return (
         <View style={styles.container}>
@@ -631,20 +691,26 @@ const VisitsList = ({ authToken }) => {
                 onDateChange={handleDateChange}
             />
             <View style={styles.filtersContainer}>
-                <TextInput
-                    style={styles.filterInput}
-                    placeholder="Filter by name"
-                    value={filters.customerName}
-                    onChangeText={(value) => handleFilterChange('customerName', value)}
-                    placeholderTextColor="#9CA3AF"
-                />
-                <TextInput
-                    style={styles.filterInput}
-                    placeholder="Filter by purpose"
-                    value={filters.purpose}
-                    onChangeText={(value) => handleFilterChange('purpose', value)}
-                    placeholderTextColor="#9CA3AF"
-                />
+                <View style={styles.filterField}>
+                    <Ionicons name="search-outline" size={18} color="#7C8494" />
+                    <TextInput
+                        style={styles.filterInput}
+                        placeholder="Customer"
+                        value={filters.customerName}
+                        onChangeText={(value) => handleFilterChange('customerName', value)}
+                        placeholderTextColor="#9CA3AF"
+                    />
+                </View>
+                <View style={styles.filterField}>
+                    <Ionicons name="bookmark-outline" size={18} color="#7C8494" />
+                    <TextInput
+                        style={styles.filterInput}
+                        placeholder="Purpose"
+                        value={filters.purpose}
+                        onChangeText={(value) => handleFilterChange('purpose', value)}
+                        placeholderTextColor="#9CA3AF"
+                    />
+                </View>
             </View>
             {loading ? (
                 <View style={styles.loadingContainer}>
@@ -656,15 +722,41 @@ const VisitsList = ({ authToken }) => {
                     <Text style={styles.errorText}>{error}</Text>
                 </View>
             ) : (
-                <FlatList
-                    data={filteredVisits}
-                    renderItem={renderVisitCard}
-                    keyExtractor={(item) => item.id.toString()}
-                    contentContainerStyle={styles.listContainer}
-                    ListEmptyComponent={() => (
-                        <Text style={styles.noVisitsText}>No visits found for this date</Text>
-                    )}
-                />
+                <>
+                    <View style={styles.resultsHeader}>
+                        <Text style={styles.resultsTitle}>Scheduled visits</Text>
+                        <Text style={styles.resultsCount}>{filteredVisits.length} {filteredVisits.length === 1 ? 'visit' : 'visits'}</Text>
+                    </View>
+                    <FlatList
+                        data={filteredVisits}
+                        renderItem={renderVisitCard}
+                        keyExtractor={(item) => item.id.toString()}
+                        contentContainerStyle={styles.listContainer}
+                        contentInsetAdjustmentBehavior="automatic"
+                        onEndReached={handleLoadMore}
+                        onEndReachedThreshold={0.5}
+                        ListEmptyComponent={() => (
+                            <View style={styles.emptyVisitsState}>
+                                <View style={styles.emptyVisitsIcon}>
+                                    <Ionicons name="calendar-outline" size={25} color="#4F46E5" />
+                                </View>
+                                <Text style={styles.noVisitsText}>No visits scheduled for this date</Text>
+                                <Text style={styles.emptyVisitsHint}>Use the plus button to create one.</Text>
+                            </View>
+                        )}
+                        ListFooterComponent={
+                            isLoadingMore ? (
+                                <View style={styles.paginationLoading}>
+                                    <ActivityIndicator size="small" color="#4F46E5" />
+                                </View>
+                            ) : currentPage < totalPages - 1 ? (
+                                <TouchableOpacity style={styles.loadMoreVisitsButton} onPress={handleLoadMore}>
+                                    <Text style={styles.loadMoreVisitsText}>Load More Visits</Text>
+                                </TouchableOpacity>
+                            ) : null
+                        }
+                    />
+                </>
             )}
             <TouchableOpacity style={styles.addButton} onPress={openModal}>
                 <Ionicons name="add" size={24} color="white" />
@@ -677,76 +769,94 @@ const VisitsList = ({ authToken }) => {
                 transparent={true}
             >
                 <View style={styles.modalBackground}>
-                    <View style={styles.modalContainer}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Create Visit</Text>
-                            <TouchableOpacity style={styles.closeButton} onPress={closeModal}>
-                                <Ionicons name="close" size={24} color="#000" />
+                    <View style={[styles.modalContainer, styles.createVisitModalContainer]}>
+                        <View style={styles.sheetHandle} />
+                        <View style={[styles.modalHeader, styles.createVisitHeader]}>
+                            <View style={styles.createVisitHeading}>
+                                <Text style={styles.createVisitTitle}>Create Visit</Text>
+                                <Text style={styles.createVisitSubtitle}>Choose a customer to continue</Text>
+                            </View>
+                            <TouchableOpacity style={styles.sheetCloseButton} onPress={closeModal} accessibilityLabel="Close create visit">
+                                <Ionicons name="close" size={20} color="#374151" />
                             </TouchableOpacity>
                         </View>
 
                         {!selectedStore ? (
                             <View style={styles.storeSection}>
-                                <Text style={styles.sectionTitle}>Select Store</Text>
                                 <View style={styles.searchInputContainer}>
                                     <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
                                     <TextInput
                                         style={styles.searchInput}
-                                        placeholder="Search stores by name"
+                                        placeholder="Search customers by name"
                                         value={storeSearchText}
                                         onChangeText={handleStoreSearchChange}
                                         placeholderTextColor="#999"
                                     />
                                 </View>
+
+                                <View style={styles.visitFilterPanel}>
+                                    <Text style={styles.visitFilterLabel}>Customer Type</Text>
+                                    <View style={styles.visitFilterOptions}>
+                                        {[{ label: 'All', value: 'all' }, ...CLIENT_TYPE_OPTIONS].map((option) => (
+                                            <TouchableOpacity key={option.value} onPress={() => setCustomerTypeFilter(option.value)} style={[styles.visitFilterChip, customerTypeFilter === option.value && styles.visitFilterChipActive]}>
+                                                <Text style={[styles.visitFilterChipText, customerTypeFilter === option.value && styles.visitFilterChipTextActive]}>{option.label}</Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                </View>
+
+                                <TouchableOpacity style={styles.createSiteVisitAction} onPress={openCreateStoreModal}>
+                                    <View style={styles.createSiteVisitActionIcon}><Ionicons name="add" size={21} color="#4F46E5" /></View>
+                                    <View style={styles.createSiteVisitActionText}>
+                                        <Text style={styles.createSiteVisitActionTitle}>Create a new site visit</Text>
+                                        <Text style={styles.createSiteVisitActionSubtitle}>Customer not in this list?</Text>
+                                    </View>
+                                    <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+                                </TouchableOpacity>
                                 
                                 <FlatList
-                                    data={stores}
+                                    data={visibleStores}
+                                    style={styles.storesList}
+                                    contentContainerStyle={styles.storesListContent}
+                                    ListHeaderComponent={() => (
+                                        <View style={styles.storeResultsHeader}>
+                                            <Text style={styles.storeResultsTitle}>Customers</Text>
+                                            <Text style={styles.storeResultsCount}>{visibleStores.length} results</Text>
+                                        </View>
+                                    )}
                                     renderItem={({ item }) => (
                                         <TouchableOpacity
                                             style={styles.storeItem}
                                             onPress={() => handleStoreSelect(item)}
                                         >
+                                            <View style={styles.storeItemAvatar}>
+                                                <Ionicons name="storefront-outline" size={20} color="#4F46E5" />
+                                            </View>
                                             <View style={styles.storeItemContent}>
-                                                <Text style={styles.storeItemName}>{item.storeName}</Text>
-                                                <View style={styles.storeItemGrid}>
-                                                    <View style={styles.storeItemColumn}>
-                                                        <View style={styles.storeItemRow}>
-                                                            <Ionicons name="person-outline" size={14} color="#6B7280" />
-                                                            <Text style={styles.storeItemText} numberOfLines={1}>
-                                                                {item.clientFirstName} {item.clientLastName}
-                                                            </Text>
-                                                        </View>
-                                                        <View style={styles.storeItemRow}>
-                                                            <Ionicons name="business-outline" size={14} color="#6B7280" />
-                                                            <Text style={styles.storeItemText} numberOfLines={1}>
-                                                                {item.clientType || 'N/A'}
-                                                            </Text>
-                                                        </View>
+                                                <View style={styles.storeItemHeader}>
+                                                    <Text style={styles.storeItemName} numberOfLines={1}>{item.storeName}</Text>
+                                                    {!!item.clientType && <View style={styles.storeTypeBadge}><Text style={styles.storeTypeBadgeText}>{item.clientType}</Text></View>}
+                                                </View>
+                                                <View style={styles.storeItemDetails}>
+                                                    <View style={styles.storeItemRow}>
+                                                        <Ionicons name="person-outline" size={13} color="#7C8494" />
+                                                        <Text style={styles.storeItemText} numberOfLines={1}>{[item.clientFirstName, item.clientLastName].filter(Boolean).join(' ') || 'Customer'}</Text>
                                                     </View>
-                                                    <View style={styles.storeItemColumn}>
-                                                        <View style={styles.storeItemRow}>
-                                                            <Ionicons name="location-outline" size={14} color="#6B7280" />
-                                                            <Text style={styles.storeItemText} numberOfLines={1}>
-                                                                {item.city}
-                                                            </Text>
-                                                        </View>
-                                                        <View style={styles.storeItemRow}>
-                                                            <Ionicons name="call-outline" size={14} color="#6B7280" />
-                                                            <Text style={styles.storeItemText} numberOfLines={1}>
-                                                                {item.primaryContact}
-                                                            </Text>
-                                                        </View>
+                                                    <View style={styles.storeItemRow}>
+                                                        <Ionicons name="location-outline" size={13} color="#7C8494" />
+                                                        <Text style={styles.storeItemText} numberOfLines={1}>{item.city || 'Location not set'}</Text>
                                                     </View>
                                                 </View>
                                             </View>
+                                            <Ionicons name="chevron-forward" size={20} color="#7C8494" />
                                         </TouchableOpacity>
                                     )}
                                     keyExtractor={(item) => (item?.storeId || '').toString()}
                                     ListEmptyComponent={() => (
                                         <Text style={styles.noStoresText}>
                                             {isStoreLoading ? 'Searching...' : 
-                                             storeSearchText.trim() ? 'No stores found matching your search' : 
-                                             'No stores available'}
+                                             storeSearchText.trim() ? 'No customers found matching your search' :
+                                             'No customers available'}
                                         </Text>
                                     )}
                                     ListFooterComponent={() => (
@@ -925,6 +1035,17 @@ const VisitsList = ({ authToken }) => {
                                     onChangeText={(text) => setNewStoreDetails({ ...newStoreDetails, state: text })}
                                 />
                             </View>
+                            <View style={styles.inputContainer}>
+                                <Text style={styles.label}>Year of Joining (optional)</Text>
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="e.g. 2021"
+                                    value={String(newStoreDetails.yearOfJoining || '')}
+                                    onChangeText={(text) => setNewStoreDetails({ ...newStoreDetails, yearOfJoining: text.replace(/[^0-9]/g, '').slice(0, 4) })}
+                                    keyboardType="number-pad"
+                                    maxLength={4}
+                                />
+                            </View>
 
                             <TouchableOpacity
                                 style={styles.createButton}
@@ -945,8 +1066,9 @@ const VisitsList = ({ authToken }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        padding: 16,
-        backgroundColor: '#f5f5f5',
+        paddingHorizontal: 14,
+        paddingTop: 10,
+        backgroundColor: '#F4F5F8',
     },
     dateFilterContainer: {
         flexDirection: 'row',
@@ -969,22 +1091,63 @@ const styles = StyleSheet.create({
     },
     filtersContainer: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 16,
-        backgroundColor: '#F9FAFB',
-        padding: 12,
-        borderRadius: 8,
+        gap: 10,
+        marginBottom: 14,
+    },
+    filterField: {
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        borderColor: '#E5E7EB',
+        borderRadius: 11,
+        borderWidth: 1,
+        flex: 1,
+        flexDirection: 'row',
+        minHeight: 46,
+        paddingHorizontal: 11,
     },
     filterInput: {
         flex: 1,
-        height: 40,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        fontSize: 16,
-        color: '#1F2937',
-        marginRight: 12,
+        color: '#202938',
+        fontSize: 13,
+        paddingHorizontal: 8,
+        paddingVertical: 10,
+    },
+    resultsHeader: {
+        alignItems: 'center',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 10,
+        paddingHorizontal: 2,
+    },
+    resultsTitle: {
+        color: '#202938',
+        fontSize: 15,
+        fontWeight: '800',
+    },
+    resultsCount: {
+        color: '#6B7280',
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    emptyVisitsState: {
+        alignItems: 'center',
+        paddingHorizontal: 28,
+        paddingTop: 48,
+    },
+    emptyVisitsIcon: {
+        alignItems: 'center',
+        backgroundColor: '#EEF2FF',
+        borderRadius: 24,
+        height: 48,
+        justifyContent: 'center',
+        marginBottom: 9,
+        width: 48,
+    },
+    emptyVisitsHint: {
+        color: '#7C8494',
+        fontSize: 13,
+        marginTop: 4,
+        textAlign: 'center',
     },
     loadingText: {
         fontSize: 16,
@@ -1017,21 +1180,36 @@ const styles = StyleSheet.create({
         marginTop: 20,
     },
     listContainer: {
-        paddingBottom: 80,
+        paddingBottom: 112,
+    },
+    paginationLoading: {
+        alignItems: 'center',
+        paddingVertical: 18,
+    },
+    loadMoreVisitsButton: {
+        alignItems: 'center',
+        paddingVertical: 16,
+    },
+    loadMoreVisitsText: {
+        color: '#4F46E5',
+        fontSize: 14,
+        fontWeight: '700',
     },
     card: {
         backgroundColor: '#FFFFFF',
-        borderRadius: 10,
-        padding: 20,
-        marginBottom: 20,
+        borderColor: '#E7EAF0',
+        borderRadius: 16,
+        borderWidth: 1,
+        marginBottom: 12,
+        overflow: 'hidden',
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
             height: 2,
         },
-        shadowOpacity: 0.25,
-        shadowRadius: 3.84,
-        elevation: 5,
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+        elevation: 2,
     },
     statusBar: {
         position: 'absolute',
@@ -1044,29 +1222,64 @@ const styles = StyleSheet.create({
     },
     cardContent: {
         flexDirection: 'column',
+        padding: 12,
     },
     cardHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 15,
+        alignItems: 'flex-start',
+        marginBottom: 12,
     },
-
+    cardTitleBlock: {
+        flex: 1,
+        minWidth: 0,
+    },
+    visitIdentity: {
+        alignItems: 'center',
+        flex: 1,
+        flexDirection: 'row',
+        minWidth: 0,
+    },
+    visitIconBox: {
+        alignItems: 'center',
+        backgroundColor: '#EEF2FF',
+        borderRadius: 11,
+        height: 38,
+        justifyContent: 'center',
+        marginRight: 10,
+        width: 38,
+    },
     storeName: {
-        fontSize: 20,
-        fontWeight: 'bold',
+        fontSize: 16,
+        fontWeight: '800',
         color: '#1F2937',
-        marginBottom: 15,
+    },
+    visitReference: {
+        color: '#7C8494',
+        fontSize: 11,
+        fontWeight: '600',
+        marginTop: 2,
+    },
+    visitCustomerName: {
+        color: '#6B7280',
+        fontSize: 13,
+        fontWeight: '600',
+        marginTop: 3,
     },
     statusContainer: {
-        borderRadius: 20,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        alignItems: 'center',
+        borderRadius: 16,
+        flexDirection: 'row',
+        gap: 4,
+        paddingHorizontal: 9,
+        paddingVertical: 6,
+        alignSelf: 'flex-start',
     },
     statusText: {
-        fontSize: 14,
-        fontWeight: 'bold',
+        fontSize: 10,
+        fontWeight: '800',
         color: '#FFFFFF',
+        textTransform: 'uppercase',
     },
 
     employeeName: {
@@ -1120,6 +1333,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         elevation: 5,
     },
+    addButtonDisabled: {
+        backgroundColor: '#9CA3AF',
+        elevation: 1,
+    },
     modalContent: {
         flex: 1,
         padding: 20,
@@ -1144,7 +1361,26 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
         padding: 20,
-        maxHeight: '80%',
+        maxHeight: '95%',
+        minHeight: '70%',
+    },
+    createVisitModalContainer: {
+        maxHeight: '92%',
+        paddingTop: 9,
+        paddingHorizontal: 16,
+    },
+    sheetHandle: {
+        width: 38,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: '#D2D6DE',
+        alignSelf: 'center',
+        marginBottom: 4,
+    },
+    modalKeyboardView: {
+        flex: 1,
+        width: '100%',
+        justifyContent: 'flex-end',
     },
     modalHeader: {
         flexDirection: 'row',
@@ -1156,11 +1392,46 @@ const styles = StyleSheet.create({
         fontSize: 20,
         fontWeight: 'bold',
     },
+    createVisitHeader: {
+        marginBottom: 10,
+        paddingTop: 4,
+    },
+    createVisitHeading: {
+        flex: 1,
+        minWidth: 0,
+        paddingRight: 12,
+    },
+    createVisitTitle: {
+        color: '#202938',
+        fontSize: 17,
+        lineHeight: 22,
+    },
+    createVisitSubtitle: {
+        color: '#7C8494',
+        fontSize: 11,
+        marginTop: 2,
+    },
+    sheetCloseButton: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        backgroundColor: '#F2F4F7',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 0,
+    },
     closeButton: {
         padding: 5,
     },
     storeSection: {
         marginBottom: 20,
+        flex: 1,
+    },
+    storesList: {
+        flex: 1,
+    },
+    storesListContent: {
+        paddingBottom: 24,
     },
     sectionTitle: {
         fontSize: 18,
@@ -1170,28 +1441,42 @@ const styles = StyleSheet.create({
     searchInputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F3F4F6',
-        borderRadius: 10,
+        minHeight: 46,
+        backgroundColor: '#F8F9FB',
+        borderRadius: 11,
         paddingHorizontal: 12,
-        marginBottom: 16,
+        gap: 10,
+        marginBottom: 14,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: '#DCE1EA',
     },
     searchInput: {
         flex: 1,
-        fontSize: 16,
-        color: '#1F2937',
-        paddingVertical: 12,
+        fontSize: 14,
+        color: '#202938',
+        paddingHorizontal: 8,
+        paddingVertical: 10,
     },
-    searchIcon: {
-        marginRight: 8,
+    clearStoreSearchButton: {
+        width: 30,
+        height: 30,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     storeItem: {
-        paddingVertical: 8,
-        paddingHorizontal: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 12,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#E4E7EC',
+        borderRadius: 12,
         backgroundColor: '#FFFFFF',
+        shadowColor: '#111827',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.04,
+        shadowRadius: 3,
+        elevation: 1,
     },
     cancelButton: {
         backgroundColor: '#E5E7EB',
@@ -1257,17 +1542,42 @@ const styles = StyleSheet.create({
         color: '#1F2937',
     },
     visitDetails: {
-        marginBottom: 15,
+        backgroundColor: '#F8FAFC',
+        borderRadius: 12,
+        gap: 10,
+        marginBottom: 9,
+        padding: 9,
+    },
+    visitRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
     },
     visitItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 10,
+        minWidth: 0,
+    },
+    visitMetaIcon: {
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        borderColor: '#E7EAF0',
+        borderRadius: 9,
+        borderWidth: 1,
+        height: 34,
+        justifyContent: 'center',
+        marginRight: 9,
+        width: 34,
+    },
+    visitMetaLabel: {
+        color: '#8B95A7',
+        fontSize: 10,
+        fontWeight: '800',
+        marginBottom: 2,
     },
     visitText: {
-        fontSize: 16,
-        color: '#4B5563',
-        marginLeft: 10,
+        color: '#374151',
+        fontSize: 13,
+        fontWeight: '700',
     },
     visitIcon: {
         justifyContent: 'center',
@@ -1281,19 +1591,37 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginTop: 15,
-        paddingTop: 10,
+        paddingHorizontal: 2,
+        paddingTop: 2,
         borderTopWidth: 1,
-        borderTopColor: '#E5E7EB',
+        borderTopColor: '#F3F4F6',
+    },
+    footerLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    footerRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     footerItem: {
         flexDirection: 'row',
         alignItems: 'center',
+        maxWidth: 160,
+    },
+    footerMeta: {
+        alignItems: 'center',
+        flex: 1,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+        minWidth: 0,
     },
     footerText: {
-        fontSize: 14,
         color: '#6B7280',
-        marginLeft: 5,
+        fontSize: 12,
+        marginLeft: 6,
+        fontWeight: '600',
     },
     locationLink: {
         color: '#4F46E5',
@@ -1375,8 +1703,231 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: 'bold',
     },
-    buttonDisabled: {
-        backgroundColor: '#9CA3AF',
+    activityCompleteButton: {
+        marginTop: 12,
+        marginBottom: 12,
+        minHeight: 44,
+        borderRadius: 8,
+        backgroundColor: '#4F46E5',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 16,
+        gap: 8,
+    },
+    activityCompleteButtonDisabled: {
+        opacity: 0.7,
+    },
+    activityCompleteButtonText: {
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    activityConfirmOverlay: {
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    activityConfirmCard: {
+        width: '86%',
+        maxWidth: 360,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 20,
+        alignSelf: 'center',
+        alignItems: 'center',
+    },
+    activityConfirmIcon: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        backgroundColor: '#EEF2FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 12,
+    },
+    activityConfirmTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 8,
+    },
+    activityConfirmText: {
+        fontSize: 14,
+        color: '#4B5563',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    activityConfirmMeta: {
+        fontSize: 13,
+        color: '#6B7280',
+        textAlign: 'center',
+        marginBottom: 16,
+    },
+    activityConfirmActions: {
+        flexDirection: 'row',
+        width: '100%',
+        gap: 12,
+    },
+    activityConfirmButton: {
+        flex: 1,
+        minHeight: 44,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    activityConfirmCancelButton: {
+        backgroundColor: '#F3F4F6',
+    },
+    activityConfirmEndButton: {
+        backgroundColor: '#4F46E5',
+    },
+    activityConfirmEndButtonDisabled: {
+        opacity: 0.55,
+    },
+    activityConfirmCancelText: {
+        color: '#374151',
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    activityConfirmEndText: {
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    activityPhotoSection: {
+        width: '100%',
+        marginBottom: 16,
+    },
+    activityPhotoTitle: {
+        color: '#374151',
+        fontSize: 13,
+        fontWeight: '700',
+        marginBottom: 8,
+        textAlign: 'left',
+    },
+    activityPhotoActions: {
+        flexDirection: 'row',
+        gap: 10,
+        marginBottom: 10,
+    },
+    activityExistingPhotoBlock: {
+        width: '100%',
+        marginBottom: 10,
+    },
+    activityExistingPhotoText: {
+        color: '#6B7280',
+        fontSize: 12,
+        fontWeight: '600',
+        marginBottom: 8,
+    },
+    activityPhotoButton: {
+        flex: 1,
+        minHeight: 40,
+        borderWidth: 1,
+        borderColor: '#C7D2FE',
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: 6,
+        backgroundColor: '#EEF2FF',
+    },
+    activityPhotoButtonDisabled: {
+        opacity: 0.5,
+    },
+    activityPhotoButtonText: {
+        color: '#4F46E5',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    activityPreviewRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+    activityPreviewWrap: {
+        position: 'relative',
+    },
+    activityPreviewImage: {
+        width: 52,
+        height: 52,
+        borderRadius: 6,
+    },
+    activityAttachmentRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 10,
+    },
+    activityAttachmentImage: {
+        width: 60,
+        height: 60,
+        borderRadius: 6,
+        backgroundColor: '#E5E7EB',
+    },
+    activityAttachmentPlaceholder: {
+        width: 60,
+        height: 60,
+        borderRadius: 6,
+        backgroundColor: '#E5E7EB',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    activityAttachmentPlaceholderText: {
+        color: '#6B7280',
+        fontSize: 10,
+    },
+    activityRemovePhotoButton: {
+        position: 'absolute',
+        right: -6,
+        top: -6,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: '#EF4444',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    activityRemovePhotoText: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: '800',
+    },
+    activityCameraContainer: {
+        flex: 1,
+        backgroundColor: '#000000',
+    },
+    activityCameraPreview: {
+        flex: 1,
+    },
+    activityCameraControls: {
+        flexDirection: 'row',
+        gap: 12,
+        padding: 20,
+        backgroundColor: '#111827',
+    },
+    activityCameraCancelButton: {
+        flex: 1,
+        borderWidth: 1,
+        borderColor: '#FFFFFF',
+        borderRadius: 8,
+        paddingVertical: 14,
+        alignItems: 'center',
+    },
+    activityCameraCancelText: {
+        color: '#FFFFFF',
+        fontWeight: '700',
+    },
+    activityCaptureButton: {
+        flex: 1,
+        backgroundColor: '#4F46E5',
+        borderRadius: 8,
+        paddingVertical: 14,
+        alignItems: 'center',
+    },
+    activityCaptureButtonText: {
+        color: '#FFFFFF',
+        fontWeight: '700',
     },
     confirmationContainer: {
         flex: 1,
@@ -1477,13 +2028,14 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         flexGrow: 1,
-        paddingBottom: 20,
+        paddingBottom: 120,
     },
     noStoresText: {
         textAlign: 'center',
-        color: '#6B7280',
-        fontSize: 16,
-        paddingVertical: 16,
+        color: '#7C8494',
+        fontSize: 12,
+        lineHeight: 17,
+        maxWidth: 250,
     },
     loadingContainer: {
         flex: 1,
@@ -1495,33 +2047,298 @@ const styles = StyleSheet.create({
         color: '#6B7280',
         marginTop: 4,
     },
+    radiusSelector: {
+        padding: 11,
+        backgroundColor: '#F8F9FC',
+        borderRadius: 11,
+        borderWidth: 1,
+        borderColor: '#E7EAF0',
+    },
+    radiusSelectorHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    radiusLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#3D4656',
+        marginLeft: 6,
+    },
+    radiusButtons: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+    },
+    radiusButton: {
+        backgroundColor: '#FFFFFF',
+        paddingVertical: 7,
+        paddingHorizontal: 11,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        marginRight: 7,
+        marginBottom: 7,
+    },
+    radiusButtonActive: {
+        backgroundColor: '#4F46E5',
+        borderColor: '#4F46E5',
+    },
+    radiusButtonText: {
+        fontSize: 12,
+        color: '#6B7280',
+        fontWeight: '500',
+    },
+    radiusButtonTextActive: {
+        color: '#FFFFFF',
+        fontWeight: '600',
+    },
+    radiusAndTypeContainer: {
+        marginBottom: 12,
+        gap: 8,
+    },
+    typeFilter: {
+        backgroundColor: '#F8F9FC',
+        borderRadius: 11,
+        padding: 11,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    typeFilterHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+        gap: 6,
+    },
+    typeFilterLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#3D4656',
+    },
+    typeFilterChips: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 7,
+    },
+    typeChip: {
+        alignItems: 'center',
+        flexDirection: 'row',
+        gap: 4,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        backgroundColor: '#FFFFFF',
+    },
+    typeChipActive: {
+        backgroundColor: '#4F46E5',
+        borderColor: '#4F46E5',
+    },
+    typeChipText: {
+        fontSize: 11,
+        color: '#4B5563',
+    },
+    typeChipTextActive: {
+        color: '#FFFFFF',
+        fontWeight: '600',
+    },
+    createSiteVisitAction: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: 56,
+        backgroundColor: '#F7F8FF',
+        borderWidth: 1,
+        borderColor: '#DDE3FF',
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        marginBottom: 12,
+    },
+    createSiteVisitActionIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        backgroundColor: '#E9ECFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 9,
+    },
+    createSiteVisitActionText: {
+        flex: 1,
+        minWidth: 0,
+    },
+    createSiteVisitActionTitle: {
+        color: '#3431B5',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    createSiteVisitActionSubtitle: {
+        color: '#747D8E',
+        fontSize: 11,
+        marginTop: 2,
+    },
+    visitFilterPanel: {
+        backgroundColor: '#F7F8FB',
+        borderWidth: 1,
+        borderColor: '#E7EAF0',
+        borderRadius: 12,
+        padding: 10,
+        marginBottom: 9,
+    },
+    visitFilterLabel: {
+        color: '#4B5563',
+        fontSize: 12,
+        fontWeight: '700',
+        marginBottom: 8,
+    },
+    visitFilterOptions: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 7,
+    },
+    visitFilterChip: {
+        backgroundColor: '#FFFFFF',
+        borderColor: '#E1E5EC',
+        borderRadius: 8,
+        borderWidth: 1,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+    },
+    visitFilterChipActive: {
+        backgroundColor: '#4F46E5',
+        borderColor: '#4F46E5',
+    },
+    visitFilterChipText: {
+        color: '#697284',
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    visitFilterChipTextActive: {
+        color: '#FFFFFF',
+    },
+    locationErrorBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF2F2',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#FEE2E2',
+    },
+    locationErrorText: {
+        fontSize: 13,
+        color: '#EF4444',
+        marginLeft: 8,
+        flex: 1,
+    },
     storeItemContent: {
         flex: 1,
+        minWidth: 0,
+        marginRight: 8,
+    },
+    storeItemAvatar: {
+        width: 38,
+        height: 38,
+        borderRadius: 11,
+        backgroundColor: '#EEF2FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    storeItemHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 7,
     },
     storeItemName: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#1F2937',
-        marginBottom: 4,
-    },
-    storeItemGrid: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-    },
-    storeItemColumn: {
         flex: 1,
-        marginRight: 8,
+        minWidth: 0,
+        fontSize: 14,
+        lineHeight: 19,
+        fontWeight: '700',
+        color: '#202938',
+    },
+    storeTypeBadge: {
+        maxWidth: '42%',
+        backgroundColor: '#F1F3F7',
+        borderRadius: 999,
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+    },
+    storeTypeBadgeText: {
+        color: '#697284',
+        fontSize: 9,
+        fontWeight: '700',
+    },
+    storeItemDetails: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 10,
+        marginTop: 6,
     },
     storeItemRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 2,
+        maxWidth: '100%',
+        gap: 4,
     },
     storeItemText: {
+        fontSize: 11,
+        color: '#697284',
+        flexShrink: 1,
+    },
+    storeResultsHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 9,
+        paddingHorizontal: 2,
+    },
+    storeResultsTitle: {
+        color: '#293241',
         fontSize: 13,
-        color: '#6B7280',
-        marginLeft: 4,
-        flex: 1,
+        fontWeight: '700',
+    },
+    storeResultsCount: {
+        color: '#7C8494',
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    storeLoadingState: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 32,
+    },
+    storeLoadingText: {
+        color: '#7C8494',
+        fontSize: 12,
+    },
+    storeEmptyState: {
+        alignItems: 'center',
+        backgroundColor: '#F8F9FC',
+        borderWidth: 1,
+        borderColor: '#E6E9F0',
+        borderRadius: 12,
+        paddingVertical: 24,
+        paddingHorizontal: 18,
+    },
+    storeEmptyIcon: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: '#EEF2FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 9,
+    },
+    storeEmptyTitle: {
+        color: '#202938',
+        fontSize: 14,
+        fontWeight: '700',
+        marginBottom: 3,
     },
     errorContainer: {
         flex: 1,
@@ -1533,6 +2350,112 @@ const styles = StyleSheet.create({
         color: '#EF4444',
         fontSize: 16,
         textAlign: 'center',
+    },
+    // Activity card styles
+    activityCard: {
+        borderLeftWidth: 4,
+        borderLeftColor: '#9C27B0',
+    },
+    activityCardChevron: {
+        marginLeft: 8,
+    },
+    activityTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1F2937',
+        flex: 1,
+        marginRight: 8,
+    },
+    // Create options modal styles
+    createOptionsContainer: {
+        backgroundColor: '#fff',
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        padding: 20,
+        maxHeight: '60%',
+    },
+    optionsContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        marginTop: 15,
+        gap: 10,
+    },
+    optionButton: {
+        alignItems: 'center',
+        padding: 16,
+        borderRadius: 12,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1.5,
+        borderColor: '#E5E7EB',
+        width: '48%',
+        shadowColor: '#000',
+        shadowOffset: {
+            width: 0,
+            height: 1,
+        },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 2,
+    },
+    optionIconContainer: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        backgroundColor: '#F3F4F6',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 10,
+    },
+    optionTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#1F2937',
+        marginBottom: 3,
+        textAlign: 'center',
+    },
+    optionDescription: {
+        fontSize: 11,
+        color: '#6B7280',
+        textAlign: 'center',
+        lineHeight: 14,
+    },
+    buttonDisabled: {
+        opacity: 0.55,
+    },
+    searchIcon: {
+        marginRight: 8,
+    },
+    storeItemColumn: {
+        flex: 1,
+    },
+    storeItemGrid: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    // Text area styles
+    textArea: {
+        height: 100,
+        textAlignVertical: 'top',
+    },
+    // Restriction banner styles
+    restrictionBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FEF3C7',
+        borderColor: '#F59E0B',
+        borderWidth: 1,
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 16,
+    },
+    restrictionText: {
+        flex: 1,
+        fontSize: 14,
+        color: '#92400E',
+        marginLeft: 8,
+        lineHeight: 20,
     },
 });
 

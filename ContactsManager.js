@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import {
     View,
@@ -33,7 +34,7 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
     const fetchContacts = async () => {
         try {
             const response = await axios.get(
-                `https://api.gajkesaristeels.in/professionals/getByStore?storeId=${storeId}`,
+                `${API_BASE_URL}/professionals/getByStore?storeId=${storeId}`,
                 {
                     headers: { Authorization: `Bearer ${authToken}` },
                 }
@@ -62,7 +63,7 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
             if (editingContact) {
                 // Edit existing contact
                 await axios.put(
-                    `https://api.gajkesaristeels.in/professionals/edit?professionalId=${editingContact.id}`,
+                    `${API_BASE_URL}/professionals/edit?professionalId=${editingContact.id}`,
                     {
                         ...contactForm,
                         storeId,
@@ -74,7 +75,7 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
             } else {
                 // Add new contact
                 await axios.post(
-                    'https://api.gajkesaristeels.in/professionals/addForStore',
+                    `${API_BASE_URL}/professionals/addForStore`,
                     {
                         ...contactForm,
                         storeId,
@@ -97,7 +98,7 @@ const ContactsManager = ({ storeId, authToken, onClose }) => {
     const handleDelete = async (professionalId) => {
         try {
             await axios.delete(
-                `https://api.gajkesaristeels.in/professionals/delete?professionalId=${professionalId}`,
+                `${API_BASE_URL}/professionals/delete?professionalId=${professionalId}`,
                 {
                     headers: { Authorization: `Bearer ${authToken}` },
                 }

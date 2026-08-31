@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,30 +38,11 @@ const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh, route 
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      updateLocation();
-      if (shouldRefresh) {
-        fetchCustomers();
-        setShouldRefresh(false);
-      }
-
-      // Set up interval for periodic location updates
-      const intervalId = setInterval(updateLocation, 5 * 60 * 1000); // Update every 5 minutes
-
-      return () => clearInterval(intervalId);
-    }, [updateLocation, shouldRefresh, fetchCustomers, setShouldRefresh])
-  );
-
-  useEffect(() => {
-    fetchCustomers();
-  }, [currentPage, searchQuery]);
-
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     try {
       setIsLoading(true);
       const employeeId = await AsyncStorage.getItem('employeeId');
-      let url = `https://api.gajkesaristeels.in/store/getByEmployeeWithSort?id=${employeeId}&page=${currentPage}&size=${pageSize}&sortBy=storeName&sortOrder=asc`;
+      let url = `${API_BASE_URL}/store/getByEmployeeWithSort?id=${employeeId}&page=${currentPage}&size=${pageSize}&sortBy=storeName&sortOrder=asc`;
 
       if (searchQuery) {
         url += `&storeName=${encodeURIComponent(searchQuery)}`;
@@ -79,7 +61,25 @@ const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh, route 
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [authToken, currentPage, searchQuery]);
+
+  useFocusEffect(
+    useCallback(() => {
+      updateLocation();
+      if (shouldRefresh) {
+        fetchCustomers();
+        setShouldRefresh?.(false);
+      }
+
+      // Set up interval for periodic location updates.
+      const intervalId = setInterval(updateLocation, 5 * 60 * 1000);
+      return () => clearInterval(intervalId);
+    }, [updateLocation, shouldRefresh, fetchCustomers, setShouldRefresh])
+  );
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
 
   const handleSearch = (query) => {
     setSearchQuery(query);
@@ -151,41 +151,50 @@ const CustomerListScreen = ({ authToken, shouldRefresh, setShouldRefresh, route 
     return `${diffDays} days ago`;
   };
 
+  const isDealer = (clientType) => {
+    const normalized = String(clientType || '').toLowerCase();
+    return normalized === 'dealer' || normalized === 'shop' || normalized.includes('dealer') || normalized.includes('shop');
+  };
+
+  const CustomerStatBox = ({ icon, label, value, wide = false }) => (
+    <View style={[styles.customerStatBox, wide && styles.customerStatBoxWide]}>
+      <View style={styles.customerStatIcon}>
+        <Ionicons name={icon} size={15} color="#4F46E5" />
+      </View>
+      <View style={styles.customerStatTextWrap}>
+        <Text style={styles.customerStatLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.88}>
+          {label}
+        </Text>
+        <Text style={styles.customerStatValue} numberOfLines={1} ellipsizeMode="tail">
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
+
   const renderCustomerItem = ({ item }) => (
     <TouchableOpacity
-      style={styles.card}
+      style={[styles.card, isDealer(item.clientType) && styles.dealerCard]}
       onPress={() => navigation.navigate('CustomerDetails', { customerId: item.storeId, authToken })}
     >
       <View style={styles.cardHeader}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{getInitials(item.clientFirstName, item.clientLastName)}</Text>
         </View>
-        <View style={styles.cardTitle}>
-          <Text style={styles.storeName}>{item.storeName}</Text>
-          <Text style={styles.ownerName}>{`${item.clientFirstName} ${item.clientLastName}`}</Text>
+        <View style={styles.cardInfo}>
+          <Text style={styles.storeName} numberOfLines={2} ellipsizeMode="tail">{item.storeName}</Text>
+          <View style={styles.clientTypeContainer}>{renderClientTypeTag(item.clientType)}</View>
+          <Text style={styles.ownerName} numberOfLines={1} ellipsizeMode="tail">
+            {`${item.clientFirstName || ''} ${item.clientLastName || ''}`.trim()}
+          </Text>
         </View>
-        {renderClientTypeTag(item.clientType)}
+        <Ionicons name="chevron-forward" size={22} color="#4F46E5" style={styles.cardChevronIcon} />
       </View>
       <View style={styles.cardContent}>
-        <View style={styles.contactInfo}>
-          <View style={styles.infoItem}>
-            <Ionicons name="call-outline" size={16} color="#6c63ff" />
-            <Text style={styles.infoText}>{item.primaryContact}</Text>
-          </View>
-          <View style={styles.infoItem}>
-            <Ionicons name="calendar-outline" size={16} color="#6c63ff" />
-            <Text style={styles.infoText}>{getLastVisitText(item.lastVisitDate)}</Text>
-          </View>
-        </View>
-        <View style={styles.visits}>
-          <View style={styles.visitItem}>
-            <Ionicons name="people-outline" size={16} color="#6c63ff" />
-            <Text style={styles.visitText}>Total Visits: {item.totalVisitCount}</Text>
-          </View>
-          <View style={styles.visitItem}>
-            <Ionicons name="calendar-number-outline" size={16} color="#6c63ff" />
-            <Text style={styles.visitText}>This Month: {item.visitThisMonth}</Text>
-          </View>
+        <View style={styles.customerStatsRow}>
+          <CustomerStatBox icon="calendar-outline" label="Last Visit" value={getLastVisitText(item.lastVisitDate)} wide />
+          <CustomerStatBox icon="people-outline" label="Total Visits" value={item.totalVisitCount ?? 0} />
+          <CustomerStatBox icon="calendar-number-outline" label="This Month" value={item.visitThisMonth ?? 0} />
         </View>
       </View>
     </TouchableOpacity>
@@ -277,12 +286,15 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: 12,
+    paddingTop: 12,
     paddingBottom: 12,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+  },
+  content: {
+    flex: 1,
   },
   searchContainer: {
     flex: 1,
@@ -299,7 +311,8 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 14,
+    lineHeight: 20,
     color: '#1F2937',
   },
   addButton: {
@@ -313,88 +326,145 @@ const styles = StyleSheet.create({
   listContainer: {
     paddingHorizontal: 16,
     paddingTop: 16,
+    paddingBottom: 160,
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 16,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
     elevation: 3,
   },
   cardHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 12,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#4F46E5',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    marginTop: 2,
   },
   avatarText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
   },
-  cardTitle: {
+  cardInfo: {
     flex: 1,
+    minWidth: 0,
   },
   storeName: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '700',
     color: '#1F2937',
+    marginBottom: 4,
+    lineHeight: 21,
   },
   ownerName: {
-    fontSize: 14,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
     color: '#6B7280',
+    marginTop: 3,
   },
   clientTypeTag: {
-    paddingHorizontal: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 4,
+    borderRadius: 6,
+    maxWidth: '100%',
   },
   clientTypeText: {
     color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 'bold',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  dealerCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF5722',
+  },
+  clientTypeContainer: {
+    alignItems: 'flex-start',
+    marginVertical: 3,
+  },
+  cardChevronIcon: {
+    marginLeft: 8,
+    marginTop: 6,
+  },
+  dealerBadge: {
+    backgroundColor: '#FF5722',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  dealerBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
   },
   cardContent: {
+    borderTopWidth: 1,
+    borderTopColor: '#EEF2FF',
     marginTop: 8,
+    paddingTop: 10,
   },
-  contactInfo: {
+  customerStatsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
+    gap: 6,
   },
-  infoItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  infoText: {
-    marginLeft: 4,
-    fontSize: 14,
-    color: '#4B5563',
-  },
-  visits: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  visitItem: {
+  customerStatBox: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#EEF2FF',
   },
-  visitText: {
-    marginLeft: 4,
-    fontSize: 14,
-    color: '#4B5563',
+  customerStatBoxWide: {
+    flex: 1.18,
+  },
+  customerStatIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 5,
+  },
+  customerStatTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  customerStatLabel: {
+    color: '#6B7280',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  customerStatValue: {
+    color: '#1F2937',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   paginationContainer: {
     flexDirection: 'row',
@@ -413,7 +483,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#4F46E5',
   },
   pageButtonText: {
-    fontSize: 14,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
     color: '#4B5563',
   },
   currentPageButtonText: {
@@ -423,9 +495,19 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   loaderContainer: {
-    flex: 1,
+    minHeight: 260,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  emptyContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: '#6B7280',
+    fontSize: 13,
+    lineHeight: 18,
+    fontStyle: 'italic',
   },
 });
 

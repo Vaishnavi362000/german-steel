@@ -296,6 +296,14 @@ const MeetingsList = ({ authToken }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={23} color="#6C63FF" />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Meetings</Text>
         <View style={styles.headerActions}>
           <TouchableOpacity
@@ -471,10 +479,16 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     flex: 1,
-    marginRight: 12,
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#111827',
+    marginHorizontal: 8,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
   },
   headerActions: {
     flexDirection: 'row',

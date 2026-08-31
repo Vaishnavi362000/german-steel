@@ -1,5 +1,6 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, Modal, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, Modal, ActivityIndicator, Linking, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment';
 import { useNavigation } from '@react-navigation/native';
 import { debounce } from 'lodash';
+import * as FileSystem from 'expo-file-system';
 
 // Import refactored components
 import BottomSheet from './BottomSheet';
@@ -25,12 +27,12 @@ import { getVisitActionLocation } from './MobileLocationService';
 
 const VISIT_LOCATION_OPTIONS = {
   requirePrecise: true,
-  timeoutMs: 15000,
-  highAccuracyTimeoutMs: 10000,
-  cacheMaxAgeMs: 120000,
-  cacheRequiredAccuracy: 120,
-  balancedRequiredAccuracy: 120,
-  highRequiredAccuracy: 80,
+  timeoutMs: 60000,
+  highAccuracyTimeoutMs: 30000,
+  cacheMaxAgeMs: 300000,
+  cacheRequiredAccuracy: 1000,
+  balancedRequiredAccuracy: 1000,
+  highRequiredAccuracy: 500,
 };
 
 const LOCATION_STEP_LABELS = {
@@ -39,6 +41,78 @@ const LOCATION_STEP_LABELS = {
   balanced: 'Getting your location...',
   high: 'Improving accuracy...',
   cached: 'Trying recent location...',
+};
+
+const GiftImageViewer = ({ imageUrl, authToken, visitId }) => {
+  const [localUri, setLocalUri] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const downloadImage = async () => {
+      if (!imageUrl || !authToken) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const fileName = imageUrl.split('/').pop() || 'gift_image.jpg';
+        const fileUri = FileSystem.cacheDirectory + 'gift_' + new Date().getTime() + '_' + fileName;
+        
+        // The backend's generated fileDownloadUri is broken and returns 404. 
+        // We will try the most likely backend endpoints for visit file downloads.
+        const fallbackUrls = [
+          imageUrl, // Try original first just in case
+          `${API_BASE_URL}/visit/downloadFile/${visitId}/gift/${fileName}`,
+          `${API_BASE_URL}/visit/downloadFile/${visitId}/${fileName}`,
+          `${API_BASE_URL}/visit/downloadFile/${fileName}`
+        ];
+
+        let success = false;
+        for (const url of fallbackUrls) {
+          console.log('Trying to download from:', url);
+          const result = await FileSystem.downloadAsync(url, fileUri, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          
+          if (result.status === 200) {
+            console.log('Successfully downloaded from:', url);
+            setLocalUri(result.uri);
+            success = true;
+            break;
+          }
+        }
+
+        if (!success) {
+          console.log('All fallback download URLs failed with 404.');
+        }
+      } catch (err) {
+        console.error('Error downloading gift image:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    downloadImage();
+  }, [imageUrl, authToken, visitId]);
+
+  if (loading) {
+    return (
+      <View style={{ padding: 20, alignItems: 'center', justifyContent: 'center', minHeight: 400 }}>
+        <ActivityIndicator size="large" color="#4F46E5" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ padding: 20, alignItems: 'center', justifyContent: 'center', minHeight: 400 }}>
+      {localUri ? (
+        <Image 
+          source={{ uri: localUri }} 
+          style={{ width: '100%', height: 400, resizeMode: 'contain' }} 
+        />
+      ) : (
+        <Text style={{ fontSize: 16, color: '#666' }}>No image available</Text>
+      )}
+    </View>
+  );
 };
 
 const VisitScreen = ({ route }) => {
@@ -57,6 +131,7 @@ const VisitScreen = ({ route }) => {
   const [isCheckInImagesDisabled, setIsCheckInImagesDisabled] = useState(false);
   const [isCheckInButtonEnabled, setIsCheckInButtonEnabled] = useState(false);
   const [isCheckInImageUploaded, setIsCheckInImageUploaded] = useState(false);
+  const [isGiftImageUploaded, setIsGiftImageUploaded] = useState(false);
   const [checkedIn, setCheckedIn] = useState(false);
   const [checkinDateTime, setCheckinDateTime] = useState(null);
   const navigation = useNavigation();
@@ -94,7 +169,7 @@ const VisitScreen = ({ route }) => {
     if (!storeId) return;
     try {
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/site/getByStore?id=${storeId}`,
+        `${API_BASE_URL}/site/getByStore?id=${storeId}`,
         { headers: { Authorization: `Bearer ${authToken}` } }
       );
       const sites = Array.isArray(response.data) ? response.data : [];
@@ -107,13 +182,14 @@ const VisitScreen = ({ route }) => {
 
   const fetchVisitDetails = async () => {
     try {
-      const visitResponse = await axios.get(`https://api.gajkesaristeels.in/visit/getById?id=${visitId}`, {
+      const visitResponse = await axios.get(`${API_BASE_URL}/visit/getById?id=${visitId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
       });
       
       const visitData = visitResponse.data;
+      console.log("VISIT_DETAILS_RESPONSE:", JSON.stringify(visitData, null, 2));
       if (visitData) {
         setVisit(visitData);
         setVisitStatus(getVisitStatus(visitData));
@@ -130,6 +206,7 @@ const VisitScreen = ({ route }) => {
         );
         setIsCheckInImageUploaded(hasCheckInImage);
         setIsCheckInImagesDisabled(hasCheckInImage);
+        setIsGiftImageUploaded(visitData.attachmentResponse?.some((attachment) => attachment.tag === 'gift'));
         setIsCheckInButtonEnabled(!hasCheckInImage && !isCheckedIn);
 
         // Update visitData state
@@ -145,7 +222,7 @@ const VisitScreen = ({ route }) => {
         // Only fetch client type if we have storeId
         if (visitData.storeId) {
           try {
-            const storeResponse = await axios.get(`https://api.gajkesaristeels.in/store/getById?id=${visitData.storeId}`, {
+            const storeResponse = await axios.get(`${API_BASE_URL}/store/getById?id=${visitData.storeId}`, {
               headers: {
                 Authorization: `Bearer ${authToken}`,
               },
@@ -186,6 +263,7 @@ const VisitScreen = ({ route }) => {
   };
 
   const isSiteRelatedClient = ['site visit', 'engineer', 'architect', 'builder'].includes((clientType || '').toLowerCase());
+  const isGiftingVisit = String(visit?.purpose || '').trim().toLowerCase() === 'gifting';
   
   useEffect(() => {
     const loadInitialData = async () => {
@@ -219,7 +297,7 @@ const VisitScreen = ({ route }) => {
       return;
     }
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/store/getById?id=${storeId}`, {
+      const response = await axios.get(`${API_BASE_URL}/store/getById?id=${storeId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -234,7 +312,7 @@ const VisitScreen = ({ route }) => {
   const fetchNotes = async () => {
     if (!visitId) return;
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/notes/getByVisit?id=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/notes/getByVisit?id=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const notes = Array.isArray(response.data) ? response.data : [];
@@ -251,7 +329,7 @@ const VisitScreen = ({ route }) => {
 
   const fetchBrandsProCons = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/visit/getProCons?visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/visit/getProCons?visitId=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const brandsProCons = Array.isArray(response.data) ? response.data : [];
@@ -266,7 +344,7 @@ const VisitScreen = ({ route }) => {
 
   const fetchComplaints = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/task/getByVisit?type=complaint&visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/task/getByVisit?type=complaint&visitId=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const filteredComplaints = Array.isArray(response.data)
@@ -283,7 +361,7 @@ const VisitScreen = ({ route }) => {
 
   const fetchRequirements = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/task/getByVisit?type=requirement&visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/task/getByVisit?type=requirement&visitId=${visitId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const filteredRequirements = Array.isArray(response.data)
@@ -300,7 +378,7 @@ const VisitScreen = ({ route }) => {
 
   const fetchMonthlySales = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/monthly-sale/getByVisit?visitId=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/monthly-sale/getByVisit?visitId=${visitId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -314,7 +392,7 @@ const VisitScreen = ({ route }) => {
 
   const fetchIntentLevel = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/intent-audit/getByVisit?id=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/intent-audit/getByVisit?id=${visitId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -350,7 +428,7 @@ const VisitScreen = ({ route }) => {
     const visitIntentV = newIntentLevel - 1;
     try {
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/visit/edit?id=${visit.id}`,
+        `${API_BASE_URL}/visit/edit?id=${visit.id}`,
         { visitIntentValue: newIntentLevel },
         {
           headers: {
@@ -388,7 +466,7 @@ const VisitScreen = ({ route }) => {
     }
     try {
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/visit/edit?id=${visit.id}`,
+        `${API_BASE_URL}/visit/edit?id=${visit.id}`,
         { visitIntentValue: newIntentLevel },
         {
           headers: {
@@ -648,7 +726,7 @@ const VisitScreen = ({ route }) => {
       console.log('Check-in location:', latitude, longitude);
 
       const checkinResponse = await axios.put(
-        `https://api.gajkesaristeels.in/visit/checkin?id=${visitId}`,
+        `${API_BASE_URL}/visit/checkin?id=${visitId}`,
         {
           checkinLatitude: latitude,
           checkinLongitude: longitude,
@@ -695,10 +773,10 @@ const VisitScreen = ({ route }) => {
         errorMessage = 'Check-in failed. Please try again.';
       } else if (error.message.includes('location')) {
         errorMessage = 'Unable to get your location. Please ensure:\n\n' +
-          '• You are outdoors or near a window\n' +
-          '• GPS is enabled\n' +
-          '• You have a clear view of the sky\n' +
-          '• Try moving to an area with better GPS signal';
+          'â€¢ You are outdoors or near a window\n' +
+          'â€¢ GPS is enabled\n' +
+          'â€¢ You have a clear view of the sky\n' +
+          'â€¢ Try moving to an area with better GPS signal';
       }
       
       Alert.alert(
@@ -739,7 +817,12 @@ const VisitScreen = ({ route }) => {
 
   const handleCheckOut = async () => {
     if (!isCheckoutEnabled) {
-      Alert.alert('Cannot Checkout', 'Please ensure you have added brands, set intent level, and entered monthly sales.');
+      Alert.alert(
+        'Cannot Checkout',
+        isGiftingVisit
+          ? 'Please add the gift image before completing this gifting visit.'
+          : 'Please ensure you have added brands, set intent level, and entered monthly sales.'
+      );
       return;
     }
 
@@ -758,11 +841,17 @@ const VisitScreen = ({ route }) => {
       console.log('Check-out location:', latitude, longitude);
 
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/visit/checkout?id=${visitId}`,
+        `${API_BASE_URL}/visit/checkout?id=${visitId}`,
         {
           checkoutLatitude: latitude,
           checkoutLongitude: longitude,
-          outcome: 'done',
+          outcome: isGiftingVisit ? 'gifted' : 'done',
+          ...(isGiftingVisit ? {
+            hasGift: true,
+            giftName: 'Gift',
+            giftQuantity: 1,
+            giftRemarks: 'Gift image attached',
+          } : {}),
         },
         {
           headers: {
@@ -842,7 +931,7 @@ const VisitScreen = ({ route }) => {
   const InfoItem = ({ icon, title, value, containerStyle }) => (
     <View style={[styles.infoItem, containerStyle]}>
       <View style={styles.infoIcon}>
-        <Icon name={icon} size={20} color="#4A90E2" />
+        <Icon name={icon} size={20} color="#4F46E5" />
       </View>
       <View style={styles.infoTextContainer}>
         <Text style={styles.infoTitle}>{title}</Text>
@@ -865,32 +954,56 @@ const VisitScreen = ({ route }) => {
   const VisitInfo = () => (
     <View style={styles.visitInfoContainer}>
       <View style={styles.infoRow}>
-        <InfoItem icon="calendar" title="Visit Date" value={visit ? format(new Date(visit.visit_date), 'yyyy-MM-dd') : 'N/A'} />
-        <InfoItem icon="search" title="Purpose" value={visit ? visit.purpose : 'N/A'} containerStyle={styles.rightAlignedItem} />
+        <InfoItem icon="phone" title="Contact" value={visit?.primaryContact || visit?.phone || 'N/A'} />
+        <InfoItem icon="check-circle" title="Visit Status" value={visitStatus} containerStyle={styles.rightAlignedItem} />
       </View>
       <View style={styles.infoRow}>
-        <InfoItem icon="user" title="Customer" value={visit ? visit.storeName : 'N/A'} />
-        <InfoItem icon="info-circle" title="Visit Status" value={visitStatus} containerStyle={styles.rightAlignedItem} />
+        <InfoItem icon="calendar" title="Visit Date" value={visit ? format(new Date(visit.visit_date), 'yyyy-MM-dd') : 'N/A'} />
+        <InfoItem icon="search" title="Purpose" value={visit?.purpose || 'N/A'} containerStyle={styles.rightAlignedItem} />
+      </View>
+      <View style={[styles.infoRow, styles.infoRowLast]}>
+        <InfoItem icon="building" title="Firm" value={visit?.storeName || 'N/A'} />
+        <InfoItem icon="user" title="Owner / Customer" value={visit?.customerName || visit?.ownerName || visit?.storeName || 'N/A'} containerStyle={styles.rightAlignedItem} />
       </View>
     </View>
   );
 
   const CardActions = () => {
-    const ActionButton = ({ icon, text, onPress, disabled = false, badge = null }) => (
-      <TouchableOpacity
-        style={[styles.actionBtn, disabled && styles.disabledBtn]}
-        onPress={onPress}
-        disabled={disabled}
-      >
-        <Icon name={icon} size={24} color={disabled ? "#A9A9A9" : "#4A90E2"} />
-        <Text style={[styles.actionText, disabled && styles.disabledText]}>{text}</Text>
-        {badge !== null && badge !== undefined && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{badge}</Text>
+    const ActionButton = ({ icon, text, onPress, disabled = false, badge = null }) => {
+      const hasEntries = badge === '✓' || Number(badge) > 0;
+      const recordStatus = badge === null || badge === undefined
+        ? 'Open'
+        : badge === '✓'
+          ? 'Added'
+          : Number(badge) > 0
+            ? `${badge} added`
+            : 'None yet';
+
+      return (
+        <TouchableOpacity
+          style={[styles.actionBtn, disabled && styles.disabledBtn]}
+          onPress={onPress}
+          disabled={disabled}
+          activeOpacity={0.78}
+          accessibilityRole="button"
+          accessibilityLabel={`${text}, ${recordStatus}`}
+        >
+          <View style={[styles.actionBtnIcon, disabled && styles.actionBtnIconDisabled]}>
+            <Icon name={icon} size={18} color={disabled ? '#98A2B3' : '#4F46E5'} />
           </View>
-        )}
-      </TouchableOpacity>
-    );
+          <View style={styles.actionBtnContent}>
+            <Text style={[styles.actionText, disabled && styles.disabledText]} numberOfLines={2}>{text}</Text>
+            <View style={styles.actionStatusRow}>
+              <View style={[styles.actionStatusDot, hasEntries ? styles.actionStatusDotComplete : styles.actionStatusDotEmpty]} />
+              <Text style={[styles.actionStatusText, hasEntries && styles.actionStatusTextComplete]}>
+                {recordStatus}
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color="#A0A7B4" />
+        </TouchableOpacity>
+      );
+    };
 
     const renderAssignedActions = () => (
       <View style={styles.cardActionsContainer}>
@@ -973,6 +1086,58 @@ const VisitScreen = ({ route }) => {
     );
 
     const renderOngoingActions = () => {
+      if (isGiftingVisit) {
+        return (
+          <View style={styles.giftingCard}>
+            <View style={styles.giftingHeader}>
+              <View style={styles.giftingIcon}>
+                <Ionicons name="gift-outline" size={20} color="#4F46E5" />
+              </View>
+              <View style={styles.giftingCopy}>
+                <Text style={styles.giftingTitle}>Gift image required</Text>
+                <Text style={styles.giftingDescription}>Take one clear photo of the gift to complete this visit.</Text>
+              </View>
+            </View>
+            {!isGiftImageUploaded ? (
+              <>
+                <CheckInImages
+                  visitId={visitId}
+                  authToken={authToken}
+                  imageTag="gift"
+                  actionLabel="Take Gift Photo"
+                  permissionLabel="gift image"
+                  showConnectivity={false}
+                  onImageAdded={async () => {
+                    setIsGiftImageUploaded(true);
+                    await fetchVisitDetails();
+                  }}
+                  isDisabled={isCheckingOut}
+                />
+                <View style={styles.giftingHint}>
+                  <Ionicons name="information-circle-outline" size={16} color="#7C8494" />
+                  <Text style={styles.giftingHintText}>Completion unlocks after the image is uploaded.</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.giftUploadedState}>
+                  <Ionicons name="checkmark-circle" size={20} color="#059669" />
+                  <Text style={styles.giftUploadedText}>Gift image uploaded</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.checkoutButton}
+                  onPress={handleCheckOut}
+                  disabled={isCheckingOut}
+                  activeOpacity={0.8}
+                >
+                  {isCheckingOut ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="checkmark-done-outline" size={19} color="#FFFFFF" />}
+                  <Text style={styles.checkoutButtonText}>{isCheckingOut ? (checkOutStep || 'Completing...') : 'Complete Gifting Visit'}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        );
+      }
       const actionButtons = [];
 
       // Always add Brands and Notes for all client types
@@ -1009,7 +1174,7 @@ const VisitScreen = ({ route }) => {
           />,
           <ActionButton
             key="contacts"
-            icon="people"
+            icon="users"
             text="Contacts"
             onPress={() => openModal('Contacts', ContactsManager, {
               storeId: visit.storeId,
@@ -1031,7 +1196,7 @@ const VisitScreen = ({ route }) => {
               authToken,
               readOnly: false
             })}
-            badge={visitData.monthlySales ? '✓' : null}
+            badge={visitData.monthlySales ? 'âœ“' : null}
           />,
           <ActionButton
             key="requirements"
@@ -1077,6 +1242,8 @@ const VisitScreen = ({ route }) => {
         />
       );
 
+      const requirementsText = getCheckoutRequirementsText();
+
       return (
         <View>
           <View style={styles.actionButtonsGrid}>
@@ -1091,62 +1258,196 @@ const VisitScreen = ({ route }) => {
             />
           </View>
 
-          <TouchableOpacity
-            style={[styles.checkoutButton, !isCheckoutEnabled && styles.disabledCheckoutButton]}
-            onPress={handleCheckOut}
-            disabled={!isCheckoutEnabled || isCheckingOut}
-          >
-            {isCheckingOut ? (
-              <>
-                <ActivityIndicator size="small" color="#FFFFFF" />
-                <Text style={styles.checkoutButtonText}>{checkOutStep || 'Checking out...'}</Text>
-              </>
-            ) : (
-              <Text style={styles.checkoutButtonText}>Check Out</Text>
-            )}
-          </TouchableOpacity>
+          <View style={styles.checkoutPanel}>
+            <View style={styles.checkoutPanelHeader}>
+              <View style={[styles.checkoutPanelIcon, isCheckoutEnabled ? styles.checkoutPanelIconReady : styles.checkoutPanelIconPending]}>
+                <Ionicons
+                  name={isCheckoutEnabled ? 'checkmark-circle-outline' : 'flag-outline'}
+                  size={20}
+                  color={isCheckoutEnabled ? '#059669' : '#4F46E5'}
+                />
+              </View>
+              <View style={styles.checkoutPanelHeading}>
+                <Text style={styles.checkoutPanelTitle}>Complete this visit</Text>
+              </View>
+              <View style={[styles.checkoutStatePill, isCheckoutEnabled ? styles.checkoutStatePillReady : styles.checkoutStatePillPending]}>
+                <Text style={[styles.checkoutStateText, isCheckoutEnabled ? styles.checkoutStateTextReady : styles.checkoutStateTextPending]}>
+                  {isCheckoutEnabled ? 'Ready' : 'Action needed'}
+                </Text>
+              </View>
+            </View>
 
-          {!isCheckoutEnabled && (
-            <Text style={styles.warningText}>
-              {getCheckoutRequirementsText()}
-            </Text>
-          )}
+            {!isCheckoutEnabled && !!requirementsText && (
+              <View style={styles.checkoutRequirementCard}>
+                <Ionicons name="information-circle-outline" size={18} color="#D97706" />
+                <Text style={styles.checkoutRequirementText}>{requirementsText}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.checkoutButton, !isCheckoutEnabled && styles.disabledCheckoutButton]}
+              onPress={handleCheckOut}
+              disabled={!isCheckoutEnabled || isCheckingOut}
+              activeOpacity={0.8}
+            >
+              {isCheckingOut ? (
+                <>
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <Text style={styles.checkoutButtonText}>{checkOutStep || 'Checking out...'}</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="checkmark-done-outline" size={19} color={isCheckoutEnabled ? '#FFFFFF' : '#8C94A3'} />
+                  <Text style={[styles.checkoutButtonText, !isCheckoutEnabled && styles.disabledCheckoutButtonText]}>
+                    Complete Visit
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       );
     };
 
     const renderCompletedActions = () => {
       const durationText = visitData.visitDuration;
+      const hasGiftImage = isGiftImageUploaded || visit?.attachmentResponse?.some((attachment) => attachment.tag === 'gift');
+      
+      const CompletedRecordItem = ({ icon, title, count, detail, emptyText, onPress, iconStyle, iconColor, isLast = false }) => {
+        const hasRecords = Number(count) > 0;
+
+        return (
+          <TouchableOpacity
+            style={[styles.completedItem, isLast && styles.completedItemLast]}
+            onPress={onPress}
+            activeOpacity={0.76}
+            accessibilityRole="button"
+            accessibilityLabel={`${title}, ${hasRecords ? detail : emptyText}`}
+          >
+            <View style={styles.completedItemHeader}>
+              <View style={[styles.completedItemIcon, iconStyle]}>
+                <Ionicons name={icon} size={20} color={iconColor || '#4F46E5'} />
+              </View>
+              <View style={styles.completedItemCopy}>
+                <Text style={styles.completedItemTitle}>{title}</Text>
+                <Text style={[styles.completedRecordValue, hasRecords && styles.completedRecordValueSuccess]}>
+                  {hasRecords ? detail : emptyText}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.completedItemAction}>
+              <Text style={styles.completedItemActionText}>View</Text>
+              <Ionicons name="chevron-forward" size={15} color="#4F46E5" />
+            </View>
+          </TouchableOpacity>
+        );
+      };
+
+      if (isGiftingVisit) {
+        return (
+          <View style={styles.completedContainer}>
+            <View style={styles.completedItemsContainer}>
+              <View style={styles.completedItemsHeader}>
+                <View style={styles.completedItemsHeaderIcon}>
+                  <Ionicons name="folder-open-outline" size={18} color="#4F46E5" />
+                </View>
+                <View>
+                  <Text style={styles.completedItemsTitle}>Visit records</Text>
+                  <Text style={styles.completedItemsSubtitle}>Review the details captured during this visit</Text>
+                </View>
+              </View>
+              <CompletedRecordItem
+                icon="gift-outline"
+                title="Gift Image"
+                count={hasGiftImage ? 1 : 0}
+                detail="Gift image captured"
+                emptyText="No gift image"
+                iconStyle={{ backgroundColor: '#D1FAE5' }}
+                iconColor="#059669"
+                isLast={true}
+                onPress={() => {
+                  const giftAttachment = visit?.attachmentResponse?.find((att) => att.tag === 'gift');
+                  if (giftAttachment && giftAttachment.fileDownloadUri) {
+                    openBottomSheet('Gift Image', GiftImageViewer, { imageUrl: giftAttachment.fileDownloadUri });
+                  } else {
+                    Alert.alert('Not available', 'Gift image is not available yet.');
+                  }
+                }}
+              />
+            </View>
+          </View>
+        );
+      }
+
+      const complaintsCount = Array.isArray(visitData.complaints) ? visitData.complaints.length : 0;
+      const requirementsCount = Array.isArray(visitData.requirements) ? visitData.requirements.length : 0;
+      const brandsCount = Array.isArray(visitData.brandsInUse) ? visitData.brandsInUse.length : 0;
+      const completedNotesCount = Array.isArray(visitData.notes) ? visitData.notes.length : notesCount;
+
+      const SummaryMetric = ({ icon, label, value, iconStyle, iconColor = '#4F46E5' }) => (
+        <View style={styles.summaryCard}>
+          <View style={[styles.summaryMetricIcon, iconStyle]}>
+            <Ionicons name={icon} size={17} color={iconColor} />
+          </View>
+          <Text style={styles.summaryValue} numberOfLines={1}>{value}</Text>
+          <Text style={styles.summaryLabel} numberOfLines={1}>{label}</Text>
+        </View>
+      );
+
+
 
       return (
         <View style={styles.completedContainer}>
           <View style={styles.summaryCardsContainer}>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryValue}>{durationText || '0 minutes'}</Text>
-              <Text style={styles.summaryLabel}>Duration</Text>
-            </View>
+            <SummaryMetric icon="time-outline" label="Duration" value={durationText || '0 minutes'} />
+            <View style={styles.summaryDivider} />
             {!isSiteRelatedClient ? (
-              <View style={styles.summaryCard}>
-                <Text style={styles.summaryValue}>{visitData.monthlySales ? `${visitData.monthlySales}T` : '0T'}</Text>
-                <Text style={styles.summaryLabel}>Monthly Sales</Text>
-              </View>
+              <SummaryMetric
+                icon="cash-outline"
+                label="Monthly Sales"
+                value={visitData.monthlySales ? `${visitData.monthlySales}T` : '0T'}
+                iconStyle={styles.summaryMetricIconSuccess}
+                iconColor="#059669"
+              />
             ) : (
-              <View style={styles.summaryCard}>
-                <Text style={styles.summaryValue}>{sitesCount} Projects</Text>
-                <Text style={styles.summaryLabel}>Sites</Text>
-              </View>
+              <SummaryMetric
+                icon="business-outline"
+                label="Projects"
+                value={String(sitesCount)}
+                iconStyle={styles.summaryMetricIconBlue}
+                iconColor="#2563EB"
+              />
             )}
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryValue}>{intentLevel}/10</Text>
-              <Text style={styles.summaryLabel}>Intent Level</Text>
-            </View>
+            <View style={styles.summaryDivider} />
+            <SummaryMetric
+              icon="trending-up-outline"
+              label="Intent Level"
+              value={`${intentLevel}/10`}
+              iconStyle={styles.summaryMetricIconWarning}
+              iconColor="#D97706"
+            />
           </View>
 
           <View style={styles.completedItemsContainer}>
+            <View style={styles.completedItemsHeader}>
+              <View style={styles.completedItemsHeaderIcon}>
+                <Ionicons name="folder-open-outline" size={18} color="#4F46E5" />
+              </View>
+              <View>
+                <Text style={styles.completedItemsTitle}>Visit records</Text>
+                <Text style={styles.completedItemsSubtitle}>Review the details captured during this visit</Text>
+              </View>
+            </View>
             {isSiteRelatedClient && (
               <>
-                <TouchableOpacity 
-                  style={styles.completedItem}
+                <CompletedRecordItem
+                  icon="business-outline"
+                  title="Projects"
+                  count={sitesCount}
+                  detail={`${sitesCount} ${sitesCount === 1 ? 'project' : 'projects'} added`}
+                  emptyText="No projects added"
+                  iconStyle={styles.completedItemIconBlue}
+                  iconColor="#2563EB"
                   onPress={() => openModal('Sites', Sites, {
                     visitId,
                     storeId: visit.storeId,
@@ -1154,118 +1455,85 @@ const VisitScreen = ({ route }) => {
                     readOnly: true,
                     clientType: clientType
                   })}
-                >
-                  <View style={styles.completedItemHeader}>
-                    <Ionicons name="business-outline" size={24} color="#4F46E5" />
-                    <Text style={styles.completedItemTitle}>Projects ({sitesCount})</Text>
-                  </View>
-                  <View style={styles.viewButtonContainer}>
-                    <Text style={styles.viewButtonText}>View</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={styles.completedItem}
+                />
+                <CompletedRecordItem
+                  icon="people-outline"
+                  title="Contacts"
+                  count={contactsCount}
+                  detail={`${contactsCount} ${contactsCount === 1 ? 'contact' : 'contacts'} added`}
+                  emptyText="No contacts added"
+                  iconStyle={styles.completedItemIconTeal}
+                  iconColor="#0F766E"
                   onPress={() => openModal('Contacts', ContactsManager, {
                     storeId: visit.storeId,
                     authToken,
                     readOnly: true
                   })}
-                >
-                  <View style={styles.completedItemHeader}>
-                    <Ionicons name="people-outline" size={24} color="#4F46E5" />
-                    <Text style={styles.completedItemTitle}>Contacts ({contactsCount})</Text>
-                  </View>
-                  <View style={styles.viewButtonContainer}>
-                    <Text style={styles.viewButtonText}>View</Text>
-                  </View>
-                </TouchableOpacity>
-                {contactsCount === 0 && (
-                  <Text style={styles.noDataText}>No contacts added</Text>
-                )}
+                />
               </>
             )}
 
-            <TouchableOpacity 
-              style={styles.completedItem}
+            <CompletedRecordItem
+              icon="warning-outline"
+              title="Complaints"
+              count={complaintsCount}
+              detail={`${complaintsCount} ${complaintsCount === 1 ? 'complaint' : 'complaints'} recorded`}
+              emptyText="No complaints received"
+              iconStyle={styles.completedItemIconWarning}
+              iconColor="#EA580C"
               onPress={() => openBottomSheet('Complaints', Complaints, {
                 visitId,
                 authToken,
                 readOnly: true
               })}
-            >
-              <View style={styles.completedItemHeader}>
-                <Ionicons name="warning-outline" size={24} color="#4F46E5" />
-                <Text style={styles.completedItemTitle}>Complaints ({visitData.complaints?.length || 0})</Text>
-              </View>
-              <View style={styles.viewButtonContainer}>
-                <Text style={styles.viewButtonText}>View</Text>
-              </View>
-            </TouchableOpacity>
-            {visitData.complaints?.length === 0 && (
-              <Text style={styles.noDataText}>No complaints received</Text>
-            )}
+            />
 
-            <TouchableOpacity 
-              style={styles.completedItem}
+            <CompletedRecordItem
+              icon="list-outline"
+              title="Requirements"
+              count={requirementsCount}
+              detail={`${requirementsCount} ${requirementsCount === 1 ? 'requirement' : 'requirements'} collected`}
+              emptyText="No requirements collected"
+              iconStyle={styles.completedItemIconBlue}
+              iconColor="#2563EB"
               onPress={() => openBottomSheet('Requirements', Requirements, {
                 visitId,
                 authToken,
                 readOnly: true
               })}
-            >
-              <View style={styles.completedItemHeader}>
-                <Ionicons name="list-outline" size={24} color="#4F46E5" />
-                <Text style={styles.completedItemTitle}>Requirements ({visitData.requirements?.length || 0})</Text>
-              </View>
-              <View style={styles.viewButtonContainer}>
-                <Text style={styles.viewButtonText}>View</Text>
-              </View>
-            </TouchableOpacity>
-            {visitData.requirements?.length === 0 && (
-              <Text style={styles.noDataText}>No requirements collected</Text>
-            )}
+            />
 
-            <TouchableOpacity 
-              style={styles.completedItem}
+            <CompletedRecordItem
+              icon="pricetags-outline"
+              title="Brands"
+              count={brandsCount}
+              detail={`${brandsCount} ${brandsCount === 1 ? 'brand' : 'brands'} added`}
+              emptyText="No brands added"
+              iconStyle={styles.completedItemIconPurple}
+              iconColor="#7C3AED"
               onPress={() => openBottomSheet('Brands', BrandsProCons, {
                 visitId,
                 authToken,
                 readOnly: true
               })}
-            >
-              <View style={styles.completedItemHeader}>
-                <Ionicons name="pricetags-outline" size={24} color="#4F46E5" />
-                <Text style={styles.completedItemTitle}>Brands ({visitData.brandsInUse?.length || 0})</Text>
-              </View>
-              <View style={styles.viewButtonContainer}>
-                <Text style={styles.viewButtonText}>View</Text>
-              </View>
-            </TouchableOpacity>
-            {visitData.brandsInUse?.length === 0 && (
-              <Text style={styles.noDataText}>No brands added</Text>
-            )}
+            />
 
-            <TouchableOpacity 
-              style={styles.completedItem}
+            <CompletedRecordItem
+              icon="document-text-outline"
+              title="Notes"
+              count={completedNotesCount}
+              detail={`${completedNotesCount} ${completedNotesCount === 1 ? 'note' : 'notes'} added`}
+              emptyText="No notes added"
+              iconStyle={styles.completedItemIconIndigo}
+              iconColor="#4F46E5"
+              isLast={true}
               onPress={() => openBottomSheet('Notes', Notes, {
                 visitId,
                 storeId: visit.storeId,
                 authToken,
                 readOnly: true
               })}
-            >
-              <View style={styles.completedItemHeader}>
-                <Ionicons name="document-text-outline" size={24} color="#4F46E5" />
-                <Text style={styles.completedItemTitle}>Notes ({visitData.notes?.length || 0})</Text>
-              </View>
-              <View style={styles.viewButtonContainer}>
-                <Text style={styles.viewButtonText}>View</Text>
-              </View>
-            </TouchableOpacity>
-            {visitData.notes?.length === 0 && (
-              <Text style={styles.noDataText}>No notes added</Text>
-            )}
+            />
           </View>
         </View>
       );
@@ -1281,6 +1549,9 @@ const VisitScreen = ({ route }) => {
   };
 
   const getCheckoutRequirementsText = () => {
+    if (isGiftingVisit) {
+      return isGiftImageUploaded ? '' : 'Please add a gift image before checking out.';
+    }
     const missingRequirements = [];
 
     if (!visitData.brandsInUse || visitData.brandsInUse.length === 0) {
@@ -1332,6 +1603,10 @@ const VisitScreen = ({ route }) => {
   // Add this useEffect after other useEffects
   useEffect(() => {
     const checkRequiredFields = () => {
+      if (isGiftingVisit) {
+        setIsCheckoutEnabled(isGiftImageUploaded);
+        return;
+      }
       const commonChecks = {
         hasBrands: visitData.brandsInUse?.length > 0,
         hasIntent: intentLevel > 0,
@@ -1355,7 +1630,7 @@ const VisitScreen = ({ route }) => {
     };
 
     checkRequiredFields();
-  }, [visitData, intentLevel, sitesCount, isSiteRelatedClient]);
+  }, [visitData, intentLevel, sitesCount, isSiteRelatedClient, isGiftingVisit, isGiftImageUploaded]);
 
   useEffect(() => {
     if (visit?.storeId) {
@@ -1460,7 +1735,7 @@ const VisitScreen = ({ route }) => {
       const formattedDate = format(today, 'yyyy-MM-dd');
       
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`,
+        `${API_BASE_URL}/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${formattedDate}&end=${formattedDate}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -1488,12 +1763,12 @@ const VisitScreen = ({ route }) => {
         </View>
       ) : (
         <ScrollView style={styles.bottomSheetScrollView}>
-          {isBirthday && storeDetails && (
+          {isBirthday && storeDetails && visitStatus === 'Completed' && (
             <View style={styles.birthdayCard}>
               <View style={styles.birthdayCardContent}>
                 <Ionicons name="gift" size={32} color="#EC4899" />
                 <View style={styles.birthdayTextContainer}>
-                  <Text style={styles.birthdayTitle}>🎉 Happy Birthday! 🎉</Text>
+                  <Text style={styles.birthdayTitle}>Happy Birthday!</Text>
                   <Text style={styles.birthdayMessage}>
                     Today is {storeDetails.clientFirstName} {storeDetails.clientLastName}'s birthday!
                   </Text>
@@ -1569,41 +1844,260 @@ const styles = StyleSheet.create({
   },
   visitInfoContainer: {
     backgroundColor: '#fff',
-    borderRadius: 20,
+    borderRadius: 12,
+    borderColor: '#E0E7FF',
+    borderWidth: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    marginHorizontal: 10,
+    marginTop: 10,
+    marginBottom: 12,
+    elevation: 3,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  steelReminderCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    marginBottom: 12,
     padding: 15,
-    margin: 10,
+    borderWidth: 1,
+    borderColor: '#E7E9EF',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  steelReminderHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginBottom: 14,
+  },
+  steelReminderIcon: {
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 20,
+    height: 40,
+    justifyContent: 'center',
+    marginRight: 10,
+    width: 40,
+  },
+  steelReminderTitleWrap: {
+    flex: 1,
+  },
+  steelReminderTitle: {
+    color: '#1F2937',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  steelReminderInputRow: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+  },
+  steelReminderInputWrap: {
+    flex: 1,
+    marginRight: 10,
+  },
+  steelReminderLabel: {
+    color: '#4B5563',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  steelReminderInput: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    borderWidth: 1,
+    color: '#111827',
+    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  steelReminderSaveButton: {
+    alignItems: 'center',
+    backgroundColor: '#4F46E5',
+    borderRadius: 10,
+    justifyContent: 'center',
+    minHeight: 42,
+    paddingHorizontal: 18,
+  },
+  steelReminderSaveButtonDisabled: {
+    opacity: 0.65,
+  },
+  steelReminderSaveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  steelReminderMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  steelReminderMetaText: {
+    color: '#4B5563',
+    fontSize: 12,
+    fontWeight: '600',
+    marginRight: 8,
+    marginTop: 4,
+  },
+  steelReminderSavedText: {
+    color: '#059669',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+  materialCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 16,
+    marginHorizontal: 10,
+    marginBottom: 12,
+  },
+  materialRow: {
+    marginBottom: 16,
+  },
+  materialField: {
+    marginBottom: 12,
+  },
+  materialLabel: {
+    fontSize: 14,
+    color: '#4B5563',
+    marginBottom: 6,
+    fontWeight: '500',
+  },
+  materialInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    backgroundColor: '#FFFFFF',
+  },
+  materialInputDisabled: {
+    backgroundColor: '#F3F4F6',
+    color: '#6B7280',
+  },
+  removeMaterialButton: {
+    alignSelf: 'flex-end',
+    marginTop: -4,
+  },
+  addMaterialButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  addMaterialButtonText: {
+    marginLeft: 6,
+    color: '#4F46E5',
+    fontWeight: '600',
+  },
+  saveMaterialButton: {
+    backgroundColor: '#4F46E5',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  saveMaterialButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  materialInfoNote: {
+    marginTop: 12,
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  stageSection: {
+    marginTop: 8,
+  },
+  stageOptionsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 8,
+  },
+  stageOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  stageOptionSelected: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#4F46E5',
+  },
+  stageOptionText: {
+    color: '#4B5563',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  stageOptionTextSelected: {
+    color: '#4F46E5',
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 15,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2FF',
+  },
+  infoRowLast: {
+    borderBottomWidth: 0,
+  },
+  infoRowDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2FF',
   },
   infoItem: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    minWidth: 0,
+  },
+  rightAlignedItem: {
+    marginLeft: 14,
   },
   infoIcon: {
-    width: 40,
-    height: 40,
-    backgroundColor: 'rgba(74, 144, 226, 0.1)',
-    borderRadius: 20,
+    width: 48,
+    height: 48,
+    backgroundColor: '#EEF2FF',
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 10,
+    marginRight: 12,
+  },
+  infoIconSuccess: {
+    backgroundColor: '#EEF2FF',
   },
   infoTextContainer: {
     flex: 1,
+    minWidth: 0,
   },
   infoTitle: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '500',
+    marginBottom: 3,
   },
   infoValue: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: 'bold',
-    flexWrap: 'wrap',  // Ensure text wraps properly
+    fontSize: 13,
+    color: '#1F2937',
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  infoStatusValue: {
+    color: '#059669',
   },
   statusRow: {
     flexDirection: 'row',
@@ -1627,10 +2121,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   cardActionsContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 15,
-    margin: 10,
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    padding: 0,
+    marginHorizontal: 10,
+    marginBottom: 12,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -1649,45 +2144,103 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   actionBtn: {
-    width: '23%', // Adjust to fit 4 buttons in a row with gap
-    aspectRatio: 1,
-    backgroundColor: '#f0f4ff',
+    // Leave enough room for the fixed 10px grid gap after percentage rounding
+    // so compact Android devices consistently keep two cards per row.
+    width: '48%',
+    minHeight: 74,
+    flexDirection: 'row',
+    backgroundColor: '#FAFAFF',
     borderRadius: 12,
-    padding: 15,
+    borderColor: '#E5E6F5',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 11,
     alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
   },
-  checkoutButton: {
-    backgroundColor: '#4F46E5',
-    paddingVertical: 15,
+  actionBtnIcon: {
+    width: 34,
+    height: 34,
     borderRadius: 10,
     alignItems: 'center',
-    marginTop: 20,
+    justifyContent: 'center',
+    backgroundColor: '#EFEEFF',
+    marginRight: 8,
+  },
+  actionBtnIconDisabled: {
+    backgroundColor: '#F0F1F3',
+  },
+  actionBtnContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  actionStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+  },
+  actionStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  actionStatusDotComplete: {
+    backgroundColor: '#22C55E',
+  },
+  actionStatusDotEmpty: {
+    backgroundColor: '#C3C8D0',
+  },
+  actionStatusText: {
+    color: '#8A93A2',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '600',
+  },
+  actionStatusTextComplete: {
+    color: '#15803D',
+  },
+  checkoutButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: '#4F46E5',
+    paddingVertical: 12,
+    borderRadius: 11,
+    alignItems: 'center',
+    marginTop: 13,
   },
   disabledCheckoutButton: {
-    backgroundColor: '#A0AEC0',
+    backgroundColor: '#ECEEF3',
   },
   checkoutButtonText: {
     color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  disabledCheckoutButtonText: {
+    color: '#8C94A3',
+  },
+  visitKeyboardView: {
+    flex: 1,
+  },
+  visitScrollContent: {
+    paddingBottom: 16,
   },
   bottomSheetScrollView: {
-    maxHeight: '90%', // Adjust this value as needed
+    // Removed fixed maxHeight to avoid inner blank space at the bottom of the sheet
+    paddingBottom: 0,
   },
   disabledBtn: {
-    backgroundColor: '#e0e0e0',
+    backgroundColor: '#F2F3F5',
+    borderColor: '#E5E7EB',
+    opacity: 0.72,
   },
   actionText: {
-    fontSize: 10,
-    color: '#333',
-    marginTop: 5,
-    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 15,
+    color: '#2F3746',
+    fontWeight: '700',
   },
   disabledText: {
     color: '#999',
@@ -1979,8 +2532,15 @@ const styles = StyleSheet.create({
   intentContainer: {
     backgroundColor: '#fff',
     borderRadius: 12,
+    borderColor: '#E0E7FF',
+    borderWidth: 1,
     padding: 15,
     marginTop: 15,
+    elevation: 2,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
   },
   intentTitle: {
     fontSize: 16,
@@ -1999,6 +2559,64 @@ const styles = StyleSheet.create({
   sliderLabel: {
     color: '#4A148C',
     fontSize: 12,
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingHorizontal: 5,
+  },
+  ratingButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#F8F7FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#E0E7FF',
+  },
+  activeRatingButton: {
+    backgroundColor: '#4F46E5',
+    borderColor: '#4F46E5',
+  },
+  ratingText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#6B7280',
+  },
+  activeRatingText: {
+    color: '#FFFFFF',
+  },
+  ratingLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    paddingHorizontal: 5,
+  },
+  ratingLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
+  stockLeftContainer: {
+    marginTop: 16,
+  },
+  stockLeftLabel: {
+    color: '#374151',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  stockLeftInput: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#C7D2FE',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#111827',
+    fontSize: 16,
+    padding: 12,
   },
   modalOverlay: {
     flex: 1,
@@ -2029,20 +2647,79 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
   },
+  contactsModalHeader: {
+    minHeight: 58,
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderBottomColor: '#E7EAF0',
+  },
+  contactsModalTitle: {
+    fontSize: 18,
+    color: '#202938',
+    textAlign: 'center',
+  },
   closeButton: {
     padding: 5,
+  },
+  contactsModalCloseButton: {
+    position: 'absolute',
+    right: 10,
   },
   modalScrollView: {
     flex: 1,
   },
+  modalKeyboardView: {
+    flex: 1,
+  },
+  modalScrollContent: {
+    paddingBottom: 160,
+  },
+  contactsModalScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
+  },
   actionButtonsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    padding: 10,
     gap: 10,
     justifyContent: 'space-between',
   },
-
+  ongoingRecordsSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E7E9EF',
+    padding: 14,
+    marginBottom: 12,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  ongoingRecordsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 13,
+  },
+  ongoingRecordsHeaderIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFEEFF',
+    marginRight: 9,
+  },
+  ongoingRecordsHeading: {
+    flex: 1,
+  },
+  ongoingRecordsTitle: {
+    color: '#202938',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
   actionButton: {
     width: `${100 / 2 - 5}%`, // 2 columns with gap consideration
     backgroundColor: '#ffffff',
@@ -2066,20 +2743,30 @@ const styles = StyleSheet.create({
   },
   checkInSection: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 15,
+    borderRadius: 18,
+    paddingHorizontal: 22,
+    paddingVertical: 22,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
   },
   checkInSteps: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'center',
     marginBottom: 24,
   },
+  stepNode: {
+    alignItems: 'center',
+    minWidth: 62,
+  },
   stepIndicator: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#E5E7EB',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2091,36 +2778,46 @@ const styles = StyleSheet.create({
     borderColor: '#059669',
   },
   stepNumber: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
     color: '#4B5563',
   },
+  stepLabel: {
+    color: '#9CA3AF',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 7,
+    textAlign: 'center',
+  },
+  stepLabelActive: {
+    color: '#4F46E5',
+  },
   stepConnector: {
     height: 2,
-    width: 60,
+    width: 64,
     backgroundColor: '#E5E7EB',
-    marginHorizontal: 8,
+    marginHorizontal: 2,
+    marginTop: 14,
   },
   checkInActions: {
-    gap: 20,
+    gap: 22,
   },
   actionStep: {
     gap: 8,
   },
   stepTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
     color: '#374151',
-    marginBottom: 8,
+    marginBottom: 10,
   },
   actionCard: {
-    backgroundColor: '#F3F4F6',
+    backgroundColor: 'transparent',
     borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#E5E7EB',
-    borderStyle: 'dashed',
-    overflow: 'hidden',
+    borderWidth: 0,
+    overflow: 'visible',
     position: 'relative',
+    width: '100%',
   },
   actionCardCompleted: {
     borderStyle: 'solid',
@@ -2149,7 +2846,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#4F46E5',
-    paddingVertical: 16,
+    minHeight: 56,
+    paddingVertical: 15,
     paddingHorizontal: 24,
     borderRadius: 12,
     gap: 8,
@@ -2213,68 +2911,253 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   completedContainer: {
-    backgroundColor: '#fff',
+    gap: 12,
+  },
+  completedSection: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E7EAF0',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  completedSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  completedSectionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  completedSectionTitle: {
+    color: '#202938',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  completedSummarySection: {
+    marginBottom: 0,
+  },
+  completedSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  completedSummaryLabel: {
+    flex: 0.42,
+    color: '#6B7280',
+    fontSize: 13,
+    fontWeight: '600',
+    paddingRight: 12,
+  },
+  completedSummaryValue: {
+    flex: 0.58,
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'right',
   },
   summaryCardsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 24,
+    alignItems: 'stretch',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7E9F2',
+    borderRadius: 16,
+    paddingHorizontal: 6,
+    paddingVertical: 12,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   summaryCard: {
     flex: 1,
     alignItems: 'center',
-    paddingHorizontal: 8,
+    justifyContent: 'center',
+    minWidth: 0,
+    paddingHorizontal: 4,
+  },
+  summaryMetricIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF2FF',
+    marginBottom: 7,
+  },
+  summaryMetricIconSuccess: {
+    backgroundColor: '#ECFDF5',
+  },
+  summaryMetricIconBlue: {
+    backgroundColor: '#EFF6FF',
+  },
+  summaryMetricIconWarning: {
+    backgroundColor: '#FFF7ED',
+  },
+  summaryDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    backgroundColor: '#ECEEF4',
+    marginVertical: 3,
   },
   summaryValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '700',
     color: '#1F2937',
-    marginBottom: 4,
+    marginBottom: 2,
+    textAlign: 'center',
   },
   summaryLabel: {
-    fontSize: 12,
-    color: '#6B7280',
+    fontSize: 11,
+    lineHeight: 15,
+    color: '#7C8494',
+    textAlign: 'center',
   },
   completedItemsContainer: {
-    marginTop: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7E9F2',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  completedItemsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 14,
+    paddingBottom: 10,
+  },
+  completedItemsHeaderIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  completedItemsTitle: {
+    color: '#202938',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  completedItemsSubtitle: {
+    color: '#7C8494',
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 1,
   },
   completedItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    minHeight: 64,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F1F5',
+  },
+  completedItemLast: {
+    paddingBottom: 13,
   },
   completedItemHeader: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  completedItemTitle: {
-    fontSize: 16,
-    color: '#1F2937',
-    marginLeft: 12,
+  completedItemIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
   },
-  viewButtonContainer: {
-    backgroundColor: '#4F46E5',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 6,
+  completedItemIconWarning: {
+    backgroundColor: '#FFF3E9',
+  },
+  completedItemIconBlue: {
+    backgroundColor: '#EFF6FF',
+  },
+  completedItemIconTeal: {
+    backgroundColor: '#F0FDFA',
+  },
+  completedItemIconPurple: {
+    backgroundColor: '#F5F3FF',
+  },
+  completedItemIconIndigo: {
+    backgroundColor: '#EEF2FF',
+  },
+  completedItemCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+  completedItemTitle: {
+    flexShrink: 1,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '700',
+    color: '#293241',
+  },
+  completedRecordMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginLeft: 10,
+  },
+  completedRecordValue: {
+    color: '#7C8494',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  completedRecordValueSuccess: {
+    color: '#059669',
+  },
+  completedItemAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 54,
+    height: 30,
+    paddingHorizontal: 7,
+    gap: 1,
+    backgroundColor: '#F3F4FF',
+    borderRadius: 9,
+  },
+  completedItemActionText: {
+    color: '#4F46E5',
+    fontSize: 11,
+    fontWeight: '700',
   },
   viewButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '500',
-  },
-  noDataText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontStyle: 'italic',
-    marginTop: 4,
-    marginBottom: 12,
-    marginLeft: 36,
   },
   confirmationContainer: {
     flex: 1,
@@ -2388,39 +3271,243 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
   },
-  birthdayCard: {
-    backgroundColor: '#FDF2F8',
+  giftImageSection: {
+    marginBottom: 20,
+  },
+  upcomingSiteCountSection: {
+    marginBottom: 20,
+  },
+  discussionSection: {
+    marginBottom: 20,
+  },
+  sectionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 12,
+  },
+  fieldCard: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
-    margin: 10,
-    borderWidth: 2,
-    borderColor: '#EC4899',
-    shadowColor: '#EC4899',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+    elevation: 2,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 4,
+  },
+  fieldCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  fieldCardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginLeft: 8,
+  },
+  fieldCardContent: {
+    marginTop: 8,
+  },
+  numericInput: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  upcomingSiteInfoInput: {
+    minHeight: 96,
+    marginTop: 12,
+  },
+  discussionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F7FF',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+    justifyContent: 'space-between',
+  },
+  discussionButtonText: {
+    marginLeft: 12,
+    fontSize: 16,
+    color: '#1F2937',
+    fontWeight: '500',
+    flex: 1,
+  },
+  checkoutPanel: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E7E9EF',
+    padding: 14,
+    marginTop: 12,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
     shadowRadius: 8,
-    elevation: 5,
+    elevation: 2,
+  },
+  giftingCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E4E7F5',
+    padding: 16,
+    marginTop: 12,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  giftingHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
+  giftingIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF2FF',
+    marginRight: 12,
+  },
+  giftingCopy: { flex: 1, paddingTop: 1 },
+  giftingTitle: { color: '#202938', fontSize: 16, lineHeight: 20, fontWeight: '800' },
+  giftingDescription: { color: '#667085', fontSize: 13, lineHeight: 18, marginTop: 3 },
+  giftingHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#EEF0F5',
+  },
+  giftingHintText: { flex: 1, marginLeft: 7, color: '#7C8494', fontSize: 12, lineHeight: 16 },
+  giftUploadedState: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    marginBottom: 12,
+  },
+  giftUploadedText: { marginLeft: 8, color: '#047857', fontSize: 14, fontWeight: '700' },
+  checkoutPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkoutPanelIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  checkoutPanelIconReady: {
+    backgroundColor: '#E8F8F1',
+  },
+  checkoutPanelIconPending: {
+    backgroundColor: '#EFEEFF',
+  },
+  checkoutPanelHeading: {
+    flex: 1,
+    minWidth: 0,
+  },
+  checkoutPanelTitle: {
+    color: '#202938',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  checkoutStatePill: {
+    alignSelf: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginLeft: 7,
+  },
+  checkoutStatePillReady: {
+    backgroundColor: '#E8F8F1',
+  },
+  checkoutStatePillPending: {
+    backgroundColor: '#FFF5DF',
+  },
+  checkoutStateText: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+  },
+  checkoutStateTextReady: {
+    color: '#047857',
+  },
+  checkoutStateTextPending: {
+    color: '#B45309',
+  },
+  checkoutRequirementCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginTop: 13,
+    borderRadius: 10,
+    backgroundColor: '#FFF9ED',
+    borderWidth: 1,
+    borderColor: '#F8E4B3',
+  },
+  checkoutRequirementText: {
+    flex: 1,
+    color: '#8A5A08',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  birthdayCard: {
+    backgroundColor: '#FFF5F8',
+    borderColor: '#FBCFE8',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 12,
   },
   birthdayCardContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+  },
+  birthdayMessage: {
+    color: '#9D174D',
+    fontSize: 13,
+    marginLeft: 10,
   },
   birthdayTextContainer: {
     flex: 1,
   },
   birthdayTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#EC4899',
-    marginBottom: 4,
-  },
-  birthdayMessage: {
+    color: '#831843',
     fontSize: 14,
-    color: '#9F1239',
+    fontWeight: '700',
+  },
+  viewButtonContainer: {
+    alignItems: 'flex-end',
+    marginTop: 8,
+  },
+  warningText: {
+    fontSize: 14,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginTop: 12,
+    paddingHorizontal: 16,
   },
 });
 

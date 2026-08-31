@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, KeyboardAvoidingView, Alert, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,7 +18,7 @@ const AddFollowUp = ({ customerDetails, authToken, onClose }) => {
     try {
       const employeeId = await AsyncStorage.getItem('employeeId');
       const formattedDate = format(selectedDate, 'yyyy-MM-dd');
-      await axios.put('https://api.gajkesaristeels.in/visit/create', {
+      await axios.put(`${API_BASE_URL}/visit/create`, {
         storeId: customerDetails.storeId,
         employeeId: employeeId,
         visit_date: formattedDate,

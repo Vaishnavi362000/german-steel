@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
@@ -13,11 +14,10 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import loginIllustration from './assets/Login.jpg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
-const APP_VERSION = "3.2"; // Make sure this matches your actual app version
+const APP_VERSION = "1.0"; // Make sure this matches your actual app version
 
 const LoginScreen = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
@@ -66,10 +66,19 @@ const LoginScreen = ({ onLoginSuccess }) => {
 
   const checkAppVersion = async () => {
     try {
-      const response = await axios.get('https://api.gajkesaristeels.in/version/current');
+      const response = await axios.get(`${API_BASE_URL}/version/current`);
 
       const serverVersionData = response.data;
-      const serverVersion = serverVersionData.versionName;
+      const serverVersion = typeof serverVersionData === 'string'
+        ? serverVersionData.trim()
+        : serverVersionData?.versionName || serverVersionData?.version;
+
+      // The current deployment can return HTTP 200 with no version payload
+      // while backend versioning is not configured yet.
+      if (!serverVersion) {
+        console.warn('Version endpoint returned no version; allowing login.');
+        return true;
+      }
 
       console.log('Server Version:', serverVersion);
       console.log('App Version:', APP_VERSION);
@@ -87,9 +96,9 @@ const LoginScreen = ({ onLoginSuccess }) => {
     }
   };
 
-  const compareVersions = (v1, v2) => {
-    const parts1 = v1.split('.').map(Number);
-    const parts2 = v2.split('.').map(Number);
+  const compareVersions = (v1 = '0', v2 = '0') => {
+    const parts1 = String(v1 || '0').split('.').map(Number);
+    const parts2 = String(v2 || '0').split('.').map(Number);
 
     for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
       const part1 = parts1[i] || 0;
@@ -109,7 +118,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
     }
 
     setIsLoading(true);
-    const url = 'https://api.gajkesaristeels.in/user/token';
+    const url = `${API_BASE_URL}/user/token`;
     const body = JSON.stringify({
       username: email,
       password: password,
@@ -167,13 +176,16 @@ const LoginScreen = ({ onLoginSuccess }) => {
     >
       <ScrollView contentContainerStyle={styles.scrollViewContent} ref={scrollViewRef}>
         <Text style={styles.versionText}>V {APP_VERSION}</Text>
-        <Image source={loginIllustration} style={styles.illustration} resizeMode="contain" />
+        <View style={styles.brandingContainer}>
+          <Image source={require('./assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
+
+        </View>
         <View style={styles.loginCard}>
-          <Text style={styles.title}>Sales Navigator</Text>
+          <Text style={styles.title}>German Steel Sales</Text>
           {isAppUpToDate ? (
             <>
               <View style={styles.inputContainer}>
-                <Ionicons name="mail-outline" size={24} color="#6C63FF" style={styles.inputIcon} />
+                <Ionicons name="mail-outline" size={24} color="#2563EB" style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Email"
@@ -185,7 +197,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
                 />
               </View>
               <View style={styles.inputContainer}>
-                <Ionicons name="lock-closed-outline" size={24} color="#6C63FF" style={styles.inputIcon} />
+                <Ionicons name="lock-closed-outline" size={24} color="#2563EB" style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Password"
@@ -201,7 +213,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
                   <Ionicons
                     name={showPassword ? "eye-outline" : "eye-off-outline"}
                     size={24}
-                    color="#6C63FF"
+                    color="#6B7280"
                   />
                 </TouchableOpacity>
               </View>
@@ -258,7 +270,7 @@ const styles = StyleSheet.create({
     padding: 30,
     width: '100%',
     alignItems: 'center',
-    shadowColor: '#6C63FF',
+    shadowColor: '#2563EB',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.1,
     shadowRadius: 20,
@@ -267,13 +279,33 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#6C63FF',
+    color: '#2563EB',
     marginBottom: 30,
   },
   illustration: {
     width: '80%',
     height: 200,
     marginBottom: 30,
+  },
+  brandingContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  logoImage: {
+    width: 260,
+    height: 90,
+  },
+  brandName: {
+    color: '#2563EB',
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  brandTagline: {
+    color: '#6B7280',
+    fontSize: 14,
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   versionText: {
     fontSize: 14,
@@ -323,14 +355,14 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: '#6C63FF',
+    borderColor: '#2563EB',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
     backgroundColor: 'transparent',
   },
   checkboxBoxChecked: {
-    backgroundColor: '#6C63FF',
+    backgroundColor: '#2563EB',
   },
   checkboxLabel: {
     fontWeight: 'normal',
@@ -352,7 +384,7 @@ const styles = StyleSheet.create({
   },
   poweredByText: {
     fontSize: 14,
-    color: '#6C63FF',
+    color: '#2563EB',
     marginTop: 30,
     textAlign: 'center',
   },

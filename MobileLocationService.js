@@ -2,12 +2,13 @@ import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 
 const DEFAULT_OPTIONS = {
-  timeoutMs: 15000,
-  highAccuracyTimeoutMs: 10000,
-  cacheMaxAgeMs: 120000,
-  cacheRequiredAccuracy: 120,
-  balancedRequiredAccuracy: 120,
-  highRequiredAccuracy: 80,
+  timeoutMs: 60000,
+  highAccuracyTimeoutMs: 30000,
+  cacheMaxAgeMs: 300000,
+  staleCacheMaxAgeMs: 86400000,
+  cacheRequiredAccuracy: 1000,
+  balancedRequiredAccuracy: 1000,
+  highRequiredAccuracy: 500,
   requirePrecise: false,
   onStatus: null,
 };
@@ -162,18 +163,23 @@ const ensureLocationProviders = async (options) => {
   }
 };
 
-const getCachedLocation = async (options) => {
+const getCachedLocation = async (options, { allowStale = false } = {}) => {
   notifyStatus(options, 'cached');
 
+  const maxAge = allowStale ? options.staleCacheMaxAgeMs : options.cacheMaxAgeMs;
+  const requiredAccuracy = allowStale
+    ? Math.max(options.cacheRequiredAccuracy, options.balancedRequiredAccuracy)
+    : options.cacheRequiredAccuracy;
+
   const cachedLocation = await Location.getLastKnownPositionAsync({
-    maxAge: options.cacheMaxAgeMs,
-    requiredAccuracy: options.cacheRequiredAccuracy,
+    maxAge,
+    requiredAccuracy,
   }).catch(() => null);
 
   if (
     cachedLocation &&
-    isFreshEnough(cachedLocation, options.cacheMaxAgeMs) &&
-    isAccurateEnough(cachedLocation, options.cacheRequiredAccuracy)
+    isFreshEnough(cachedLocation, maxAge) &&
+    isAccurateEnough(cachedLocation, requiredAccuracy)
   ) {
     return cachedLocation;
   }
@@ -257,6 +263,15 @@ const resolveLocation = async (options) => {
   await ensureForegroundPermission(options);
   await ensureLocationProviders(options);
 
+  // A recent cached position is immediately useful for non-precise actions,
+  // and avoids opening a new GPS watch whenever the app regains focus.
+  if (!options.requirePrecise) {
+    const cachedLocation = await getCachedLocation(options);
+    if (cachedLocation) {
+      return cachedLocation;
+    }
+  }
+
   let lastError = null;
 
   try {
@@ -306,7 +321,11 @@ const resolveLocation = async (options) => {
     }
   }
 
-  const cachedLocation = await getCachedLocation(options);
+  // When a live request cannot get a signal, prefer a last-known position to
+  // failing a non-precise flow. Precise actions still require a fresh result.
+  const cachedLocation = await getCachedLocation(options, {
+    allowStale: !options.requirePrecise,
+  });
   if (cachedLocation) {
     return cachedLocation;
   }
@@ -363,7 +382,7 @@ export const getMobileLocationErrorContent = (error, actionLabel = 'fetch locati
     case 'location_timeout':
       return {
         title: 'Location Timeout',
-        message: 'We could not get a fresh location in time, and no recent saved location was available. Please try again.',
+        message: 'We could not get a location signal in time. On the Android emulator, set a simulated location in Extended controls > Location, then try again. On a phone, make sure Location is turned on.',
       };
     case 'location_accuracy_low':
       return {

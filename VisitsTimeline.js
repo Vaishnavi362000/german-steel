@@ -1,274 +1,160 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
-import axios from 'axios';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import moment from 'moment';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { fetchStoreVisitsPage } from './utils/optimizedVisitApi';
 
-const VISITS_PER_PAGE = 2;
+const VISITS_PER_PAGE = 10;
 
 export default function VisitsTimeline({ storeId, authToken, navigation, currentVisitId, embedded = false }) {
   const [visits, setVisits] = useState([]);
-  const [displayedVisits, setDisplayedVisits] = useState([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  useEffect(() => {
-    fetchVisits();
-  }, [storeId]);
+  const loadVisits = useCallback(async (pageToLoad = 0, append = false) => {
+    if (!storeId || !authToken) return;
 
-  useEffect(() => {
-    const endIndex = page * VISITS_PER_PAGE;
-    const visitsToDisplay = visits.slice(0, endIndex);
-    setDisplayedVisits(visitsToDisplay);
-    setHasMore(endIndex < visits.length);
-  }, [visits, page]);
-
-  const fetchVisits = async () => {
+    append ? setIsLoadingMore(true) : setIsLoading(true);
     try {
-      const response = await axios.get(
-        `https://api.gajkesaristeels.in/visit/getByStore?id=${storeId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        }
-      );
-      const allVisits = response.data;
-      const filteredVisits = allVisits.filter((visit) => visit.id !== currentVisitId);
-      const sortedVisits = filteredVisits.sort(
-        (a, b) => new Date(b.visit_date) - new Date(a.visit_date)
-      );
-      setPage(1);
-      setVisits(sortedVisits);
+      const result = await fetchStoreVisitsPage({
+        storeId,
+        page: pageToLoad,
+        size: VISITS_PER_PAGE,
+        sort: 'visitDate,desc',
+        authToken,
+      });
+      const visitPage = result.page || {};
+      const receivedVisits = Array.isArray(visitPage.content) ? visitPage.content : [];
+      const filteredVisits = receivedVisits.filter((visit) => visit?.id !== currentVisitId);
+
+      setVisits((previousVisits) => {
+        const nextVisits = append ? [...previousVisits, ...filteredVisits] : filteredVisits;
+        return nextVisits.filter((visit, index, all) => (
+          all.findIndex((candidate) => candidate?.id === visit?.id) === index
+        ));
+      });
+      setPage(pageToLoad);
+
+      const lastPage = typeof visitPage.last === 'boolean'
+        ? visitPage.last
+        : pageToLoad >= Math.max(Number(visitPage.totalPages || 1) - 1, 0);
+      setHasMore(!lastPage);
     } catch (error) {
-      console.error('Error fetching visits:', error);
+      console.error('Error fetching store visit history:', error);
+      if (!append) setVisits([]);
+      setHasMore(false);
+    } finally {
+      append ? setIsLoadingMore(false) : setIsLoading(false);
     }
-  };
+  }, [authToken, currentVisitId, storeId]);
+
+  useEffect(() => {
+    loadVisits(0, false);
+  }, [loadVisits]);
 
   const handleLoadMore = () => {
-    if (hasMore) {
-      setPage((prevPage) => prevPage + 1);
-    }
+    if (!isLoadingMore && hasMore) loadVisits(page + 1, true);
   };
-
-
 
   const getVisitStatus = (visit) => {
-    let visitStatus = 'Assigned';
-    if (visit.checkinLatitude && visit.checkinLongitude && visit.checkinDate && visit.checkinTime) {
-      visitStatus = 'Ongoing';
-    }
-    if (visit.checkoutLatitude && visit.checkoutLongitude && visit.checkoutDate && visit.checkoutTime) {
-      visitStatus = 'Completed';
-    }
-    return visitStatus;
+    if (visit.checkoutLatitude && visit.checkoutLongitude && visit.checkoutDate && visit.checkoutTime) return 'Completed';
+    if (visit.checkinLatitude && visit.checkinLongitude && visit.checkinDate && visit.checkinTime) return 'Ongoing';
+    return 'Assigned';
   };
 
-  const getVisitKey = (visit, index) => (
-    visit?.id ? String(visit.id) : `visit-${index}`
-  );
+  const getVisitKey = (visit, index) => String(visit?.id || `visit-${index}`);
 
-  const renderVisitItem = ({ item: visit, index }) => (
-    <TouchableOpacity
-      key={getVisitKey(visit, index)}
-      style={styles.timelineItem}
-      onPress={() => {
-        navigation.navigate('VisitScreen', { visitId: visit.id, authToken });
-      }}
-    >
-      <View style={styles.avatarContainer}>
-        <Text style={styles.avatarText}>
-          {visit.employeeName
-            .split(' ')
-            .map((name) => name[0])
-            .join('')}
-        </Text>
-      </View>
-      {index !== displayedVisits.length - 1 && <View style={styles.timelineLine} />}
-      <View style={styles.timelineContent}>
-      <View style={styles.timelineHeader}>
-        <Text style={styles.timelineDate}>
-          {moment(visit.visit_date).format('DD MMM YYYY')}
-        </Text>
-        <TouchableOpacity onPress={() => navigation.navigate('VisitScreen', { visitId: visit.id, authToken })}>
-          <Text style={styles.visitId}>Visit ID: {visit.id}</Text>
-        </TouchableOpacity>
-      </View>
-        <Text style={styles.timelineTitle}>{visit.purpose}</Text>
-        <Text style={styles.timelineDescription}>{visit.outcome}</Text>
-        <View style={styles.intentStatusContainer}>
-          {/* <View style={[styles.intentContainer, { backgroundColor: getIntentColor(visit.intent) }]}>
-            <Text style={styles.intentText}>Intent: {visit.intent}</Text>
-          </View> */}
+  const renderVisitItem = ({ item: visit, index }) => {
+    const initials = String(visit?.employeeName || 'Employee')
+      .split(' ')
+      .filter(Boolean)
+      .map((name) => name[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+
+    return (
+      <TouchableOpacity
+        style={styles.timelineItem}
+        onPress={() => navigation.navigate('VisitScreen', { visitId: visit.id, authToken })}
+      >
+        <View style={styles.avatarContainer}><Text style={styles.avatarText}>{initials}</Text></View>
+        {index !== visits.length - 1 && <View style={styles.timelineLine} />}
+        <View style={styles.timelineContent}>
+          <View style={styles.timelineHeader}>
+            <Text style={styles.timelineDate}>{moment(visit.visit_date).format('DD MMM YYYY')}</Text>
+            <Text style={styles.visitId}>Visit ID: {visit.id}</Text>
+          </View>
+          <Text style={styles.timelineTitle}>{visit.purpose || 'Visit'}</Text>
+          {!!visit.outcome && <Text style={styles.timelineDescription}>{visit.outcome}</Text>}
           <View style={[styles.statusContainer, { backgroundColor: getStatusColor(getVisitStatus(visit)) }]}>
             <Text style={styles.statusText}>{getVisitStatus(visit)}</Text>
           </View>
         </View>
-      </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const loadMoreControl = hasMore ? (
+    <TouchableOpacity style={styles.loadMoreButton} onPress={handleLoadMore} disabled={isLoadingMore}>
+      {isLoadingMore
+        ? <ActivityIndicator size="small" color="#4F46E5" />
+        : <Text style={styles.loadMoreButtonText}>Load More</Text>}
     </TouchableOpacity>
-  );
+  ) : null;
+
+  if (isLoading) {
+    return <View style={styles.loadingState}><ActivityIndicator size="small" color="#4F46E5" /></View>;
+  }
+
+  if (embedded) {
+    return (
+      <View style={styles.embeddedContainer}>
+        {visits.map((visit, index) => renderVisitItem({ item: visit, index }))}
+        {!visits.length && <Text style={styles.emptyText}>No visits yet.</Text>}
+        {loadMoreControl}
+      </View>
+    );
+  }
 
   return (
-    <View style={[styles.container, embedded && styles.embeddedContainer]}>
-      {embedded ? (
-        <>
-          {displayedVisits.map((visit, index) => renderVisitItem({ item: visit, index }))}
-          {hasMore && (
-            <TouchableOpacity style={styles.loadMoreButton} onPress={handleLoadMore}>
-              <Text style={styles.loadMoreButtonText}>Load More</Text>
-            </TouchableOpacity>
-          )}
-        </>
-      ) : (
-        <FlatList
-          data={displayedVisits}
-          renderItem={renderVisitItem}
-          keyExtractor={getVisitKey}
-          onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={
-            hasMore ? (
-              <TouchableOpacity style={styles.loadMoreButton} onPress={handleLoadMore}>
-                <Text style={styles.loadMoreButtonText}>Load More</Text>
-              </TouchableOpacity>
-            ) : null
-          }
-        />
-      )}
-    </View>
+    <FlatList
+      data={visits}
+      renderItem={renderVisitItem}
+      keyExtractor={getVisitKey}
+      onEndReached={handleLoadMore}
+      onEndReachedThreshold={0.5}
+      contentContainerStyle={styles.container}
+      ListEmptyComponent={<Text style={styles.emptyText}>No visits yet.</Text>}
+      ListFooterComponent={loadMoreControl}
+    />
   );
 }
 
-
-const getIntentColor = (intent) => {
-  // Define your color mapping based on the intent level
-  // Example:
-  if (intent >= 8) {
-    return '#4CAF50'; // Green for high intent
-  } else if (intent >= 5) {
-    return '#FFC107'; // Yellow for medium intent
-  } else {
-    return '#F44336'; // Red for low intent
-  }
-};
-
 const getStatusColor = (status) => {
-  // Define your color mapping based on the visit status
-  // Example:
-  if (status === 'Completed') {
-    return '#4CAF50'; // Green for completed
-  } else if (status === 'Ongoing') {
-    return '#FFC107'; // Yellow for ongoing
-  } else {
-    return '#2196F3'; // Blue for assigned
-  }
+  if (status === 'Completed') return '#4CAF50';
+  if (status === 'Ongoing') return '#FFC107';
+  return '#2196F3';
 };
-
-
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 16,
-    backgroundColor: '#FFFFFF',
-  },
-  embeddedContainer: {
-    flex: 0,
-    padding: 0,
-  },
-  timelineItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 16,
-  },
-  timelinePoint: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#4F46E5',
-    marginRight: 8,
-    marginTop: 4,
-  },
-  timelineLine: {
-    position: 'absolute',
-    left: 15,
-    top: 32,
-    bottom: -16,
-    width: 2,
-    backgroundColor: '#E5E7EB',
-  },
-  timelineContent: {
-    flex: 1,
-  },
-  avatarContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#4F46E5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  avatarText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  timelineHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  timelineDate: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  visitId: {
-    fontSize: 14,
-    color: '#4F46E5',
-  },
-  timelineTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1F2937',
-    marginBottom: 4,
-  },
-  timelineDescription: {
-    fontSize: 14,
-    color: '#4B5563',
-  },
-  loadMoreButton: {
-    alignItems: 'center',
-    marginVertical: 16,
-  },
-  loadMoreButtonText: {
-    fontSize: 16,
-    color: '#4F46E5',
-    fontWeight: 'bold',
-  },
-  intentStatusContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  intentContainer: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  intentText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  statusContainer: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
+  container: { padding: 16, backgroundColor: '#FFFFFF' },
+  embeddedContainer: { flex: 0, padding: 0 },
+  timelineItem: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
+  timelineLine: { position: 'absolute', left: 15, top: 32, bottom: -16, width: 2, backgroundColor: '#E5E7EB' },
+  timelineContent: { flex: 1 },
+  avatarContainer: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#4F46E5', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  avatarText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  timelineHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  timelineDate: { fontSize: 14, color: '#6B7280' },
+  visitId: { fontSize: 14, color: '#4F46E5' },
+  timelineTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937', marginBottom: 4 },
+  timelineDescription: { fontSize: 14, color: '#4B5563' },
+  loadMoreButton: { alignItems: 'center', marginVertical: 16, minHeight: 28, justifyContent: 'center' },
+  loadMoreButtonText: { fontSize: 16, color: '#4F46E5', fontWeight: '700' },
+  statusContainer: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, marginTop: 8 },
+  statusText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
+  loadingState: { paddingVertical: 24, alignItems: 'center' },
+  emptyText: { color: '#6B7280', textAlign: 'center', paddingVertical: 24 },
 });

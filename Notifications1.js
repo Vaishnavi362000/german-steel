@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar } from 'react-native';
 import axios from 'axios';
@@ -24,7 +25,7 @@ const Notifications1 = ({ route }) => {
       const endDate = today.clone().add(1, 'days').format('YYYY-MM-DD');
 
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDate}&end=${endDate}`,
+        `${API_BASE_URL}/visit/getByDateRangeAndEmployee?id=${employeeId}&start=${startDate}&end=${endDate}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -37,7 +38,7 @@ const Notifications1 = ({ route }) => {
 
       // Fetch birthdays in the same date range
       const birthdayResponse = await axios.get(
-        `https://api.gajkesaristeels.in/store/getByDobDateRange?startDate=${startDate}&endDate=${endDate}`,
+        `${API_BASE_URL}/store/getByDobDateRange?startDate=${startDate}&endDate=${endDate}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,

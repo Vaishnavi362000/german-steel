@@ -1,9 +1,11 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, TextInput, Alert, FlatList, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
+import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 
@@ -13,7 +15,7 @@ const ExpenseTracker = () => {
   const [isYearSheetOpen, setIsYearSheetOpen] = useState(false);
   const [isExpenseTypeSheetOpen, setIsExpenseTypeSheetOpen] = useState(false);
   const [isTravelSubTypeSheetOpen, setIsTravelSubTypeSheetOpen] = useState(false);
-  const [expenseType, setExpenseType] = useState('food');
+  const [expenseType, setExpenseType] = useState('');
   const [travelSubType, setTravelSubType] = useState('car');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
@@ -28,6 +30,9 @@ const ExpenseTracker = () => {
   const currentMonth = currentDate.toLocaleString('default', { month: 'long' });
   const currentYear = currentDate.getFullYear().toString();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
+  const [formError, setFormError] = useState('');
+  const [notice, setNotice] = useState('');
 
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [selectedYear, setSelectedYear] = useState(currentYear);
@@ -37,7 +42,7 @@ const ExpenseTracker = () => {
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
 
-  const years = ['2021', '2022', '2023', '2024', '2025'];
+  const years = Array.from({ length: Math.max(2026, Number(currentYear)) - 2026 + 6 }, (_, index) => String(2026 + index));
   const expenseTypes = ['food', 'travel', 'accommodation', 'other'];
   const travelSubTypes = ['car', 'bike'];
 
@@ -60,21 +65,31 @@ const ExpenseTracker = () => {
   }, []);
 
   useEffect(() => {
-    if (expenses.length) {
-      filterExpenses(expenses, selectedMonth, selectedYear);
-    }
-  }, [selectedMonth, selectedYear]);
+    filterExpenses(expenses, selectedMonth, selectedYear);
+  }, [expenses, selectedMonth, selectedYear]);
+
+  useEffect(() => {
+    if (!authToken || !employeeId || !isFocused) return;
+    fetchExpenses(authToken, employeeId);
+    const timer = setInterval(() => fetchExpenses(authToken, employeeId), 15000);
+    return () => clearInterval(timer);
+  }, [authToken, employeeId, isFocused]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(''), 3000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   const fetchExpenses = async (token, id) => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/expense/getById?id=${id}`, {
+      const response = await axios.get(`${API_BASE_URL}/expense/getById?id=${id}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
       const data = response.data;
       setExpenses(data);
-      filterExpenses(data, selectedMonth, selectedYear);
     } catch (error) {
       console.error('Error fetching expenses:', error);
     }
@@ -89,12 +104,13 @@ const ExpenseTracker = () => {
   };
 
   const handleAddExpense = () => {
+    setFormError('');
     setIsBottomSheetOpen(true);
   };
 
   const handleCloseBottomSheet = () => {
     setIsBottomSheetOpen(false);
-    setExpenseType('food');
+    setExpenseType('');
     setAmount('');
     setDescription('');
     setSelectedImage(null);
@@ -174,19 +190,19 @@ const ExpenseTracker = () => {
       console.log('=== Starting Image Upload ===');
       console.log('Expense ID:', expenseId);
       console.log('Image URI:', imageUri);
-      
+
       const formData = new FormData();
       const fileName = imageUri.split('/').pop() || 'expense.jpg';
       const fileType = imageUri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-      
+
       formData.append('file', {
         uri: imageUri,
         name: fileName,
         type: fileType,
       });
 
-      const uploadUrl = `https://api.gajkesaristeels.in/expense/uploadFile?id=${expenseId}&tag=expense`;
-      
+      const uploadUrl = `${API_BASE_URL}/expense/uploadFile?id=${expenseId}&tag=expense`;
+
       console.log('Upload Image PUT Call - URL:', uploadUrl);
       console.log('Upload Image PUT Call - Payload:', {
         expenseId,
@@ -205,7 +221,7 @@ const ExpenseTracker = () => {
       console.log('Upload Image PUT Call - Response Status:', response.status);
       console.log('Upload Image PUT Call - Response Data:', JSON.stringify(response.data, null, 2));
       console.log('=== Image Upload Completed ===');
-      
+
       return response.data;
     } catch (error) {
       console.error('=== Image Upload Failed ===');
@@ -217,20 +233,34 @@ const ExpenseTracker = () => {
   };
 
   const handleSubmitExpense = async () => {
+    if (isUploading) return;
+    setFormError('');
+    if (!expenseType) {
+      setFormError('Select an expense type.');
+      return;
+    }
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      setFormError('Enter an amount greater than zero.');
+      return;
+    }
+    if (!description.trim()) {
+      setFormError('Add a description of the expense.');
+      return;
+    }
     try {
       setIsUploading(true);
       const newExpense = {
         type: expenseType,
         subType: expenseType === 'travel' ? travelSubType : null,
-        amount: parseFloat(amount),
-        description,
+        amount: Number(amount),
+        description: description.trim(),
         employeeId, // Use the employeeId state value
-        expenseDate: new Date().toISOString().split('T')[0],
+        expenseDate: format(new Date(), 'yyyy-MM-dd'),
       };
 
       console.log('Create Expense Payload:', JSON.stringify(newExpense, null, 2));
 
-      const response = await axios.post('https://api.gajkesaristeels.in/expense/create', newExpense, {
+      const response = await axios.post(`${API_BASE_URL}/expense/create`, newExpense, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -248,7 +278,7 @@ const ExpenseTracker = () => {
 
       if (expenseId) {
         console.log('Expense ID extracted:', expenseId);
-        
+
         // Upload image if one is selected
         if (selectedImage) {
           console.log('Image selected, starting upload...');
@@ -270,15 +300,16 @@ const ExpenseTracker = () => {
 
         // Close bottom sheet and reset form
         handleCloseBottomSheet();
+        setNotice('Expense submitted. Pending approval.');
         fetchExpenses(authToken, employeeId); // Fetch updated expenses after adding a new one
       } else {
         console.error('Failed to extract expense ID from response:', response.data);
-        Alert.alert('Error', 'Failed to create expense. Please try again.');
+        setFormError('The response could not be confirmed. Check your expense list before trying again.');
       }
     } catch (error) {
       console.error('Error creating expense:', error);
       console.log('Create Expense Error Response:', error.response?.data);
-      Alert.alert('Error', 'Failed to add expense');
+      setFormError('Unable to submit expense. Please try again.');
     } finally {
       setIsUploading(false);
     }
@@ -300,7 +331,7 @@ const ExpenseTracker = () => {
           <View style={styles.sheetHeader}>
             <Text style={styles.sheetHeaderText}>{title}</Text>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={24} color="#fff" />
+              <Ionicons name="close" size={24} color="#6C63FF" />
             </TouchableOpacity>
           </View>
           <FlatList
@@ -319,96 +350,115 @@ const ExpenseTracker = () => {
 
   return (
     <View style={styles.container}>
-      <View style={styles.filtersContainer}>
-        <TouchableOpacity style={styles.backButton} onPress={goBack}>
-          <Ionicons name="chevron-back" size={24} color="#333" />
+      {notice ? <Text accessibilityRole="alert" style={{ padding: 12, backgroundColor: '#ECFDF5', color: '#065F46' }}>{notice}</Text> : null}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={goBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color="#6C63FF" />
         </TouchableOpacity>
-        <View style={styles.filters}>
-          <TouchableOpacity style={styles.monthFilter} onPress={() => setIsMonthSheetOpen(true)}>
-            <Ionicons name="calendar-outline" size={20} color="#6C63FF" />
-            <Text style={styles.filterText}>{selectedMonth}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.yearFilter} onPress={() => setIsYearSheetOpen(true)}>
-            <Ionicons name="calendar" size={20} color="#6C63FF" />
-            <Text style={styles.filterText}>{selectedYear}</Text>
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.headerTitle}>Expense</Text>
+        <View style={styles.headerSpacer} />
       </View>
-      <TouchableOpacity style={styles.addExpenseButton} onPress={handleAddExpense}>
-        <Ionicons name="add" size={20} color="#fff" />
-        <Text style={styles.addExpenseButtonText}>Add Expense</Text>
-      </TouchableOpacity>
-      <ScrollView style={styles.expenseList}>
-        {filteredExpenses.map((expense) => (
-          <View key={expense.id} style={styles.expenseCard}>
-            <View style={styles.cardHeader}>
-              <View style={styles.dateTime}>
-                <Text style={styles.date}>{expense.expenseDate}</Text>
-              </View>
-              <View style={styles.expenseType}>
-                <Ionicons
-                  name={
-                    expense.type === 'food'
-                      ? 'fast-food-outline'
-                      : expense.type === 'travel'
-                        ? 'airplane-outline'
-                        : expense.type === 'accommodation'
-                          ? 'bed-outline'
-                          : 'cash-outline'
-                  }
-                  size={20}
-                  color="#6C63FF"
-                />
-                <Text style={styles.expenseTypeText}>{expense.type}</Text>
-              </View>
-            </View>
-            <View style={styles.cardBody}>
-              <View style={styles.amountContainer}>
-                <Text style={styles.amount}>₹{expense.amount}</Text>
-                <View style={styles.status}>
-                  <Text
-                    style={[
-                      styles.statusLabel,
-                      expense.approvalStatus?.toUpperCase() === 'APPROVED'
-                        ? styles.approvedStatus
-                        : expense.approvalStatus?.toUpperCase() === 'PENDING'
-                          ? styles.pendingStatus
-                          : styles.rejectedStatus,
-                    ]}
-                  >
-                    {expense.approvalStatus?.toUpperCase()}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.description}>
-                <Ionicons name="chatbubble-outline" size={20} color="#6C63FF" />
-                <Text style={styles.descriptionText}>{expense.description}</Text>
-              </View>
-              {expense.attachmentResponse && expense.attachmentResponse.length > 0 && (
-                <View style={styles.attachmentContainer}>
-                  <Text style={styles.attachmentLabel}>Attachments:</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attachmentScroll}>
-                    {expense.attachmentResponse.map((attachment, index) => (
-                      <ExpenseImage
-                        key={index}
-                        expenseId={expense.id}
-                        fileName={attachment.fileName}
-                        authToken={authToken}
-                        onPress={() => {
-                          console.log('Viewing attachment - GET call:', {
-                            expenseId: expense.id,
-                            fileName: attachment.fileName,
-                          });
-                        }}
-                      />
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-            </View>
+
+      <View style={styles.content}>
+        <View style={styles.filtersContainer}>
+          <View style={styles.filters}>
+            <TouchableOpacity style={styles.monthFilter} onPress={() => setIsMonthSheetOpen(true)}>
+              <Ionicons name="calendar-outline" size={20} color="#6C63FF" />
+              <Text style={styles.filterText}>{selectedMonth}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.yearFilter} onPress={() => setIsYearSheetOpen(true)}>
+              <Ionicons name="calendar" size={20} color="#6C63FF" />
+              <Text style={styles.filterText}>{selectedYear}</Text>
+            </TouchableOpacity>
           </View>
-        ))}
-      </ScrollView>
+        </View>
+        <TouchableOpacity style={styles.addExpenseButton} onPress={handleAddExpense}>
+          <Ionicons name="add" size={20} color="#fff" />
+          <Text style={styles.addExpenseButtonText}>Add Expense</Text>
+        </TouchableOpacity>
+        <ScrollView style={styles.expenseList} contentContainerStyle={styles.expenseListContent}>
+          {filteredExpenses.map((expense) => (
+            <View key={expense.id} style={styles.expenseCard}>
+              <View style={styles.cardHeader}>
+                <View style={styles.dateTime}>
+                  <Text style={styles.date}>{expense.expenseDate}</Text>
+                </View>
+                <View style={styles.expenseType}>
+                  <Ionicons
+                    name={
+                      expense.type === 'food'
+                        ? 'fast-food-outline'
+                        : expense.type === 'travel'
+                          ? 'airplane-outline'
+                          : expense.type === 'accommodation'
+                            ? 'bed-outline'
+                            : 'cash-outline'
+                    }
+                    size={20}
+                    color="#6C63FF"
+                  />
+                  <Text style={styles.expenseTypeText}>{expense.type}</Text>
+                </View>
+              </View>
+              <View style={styles.cardBody}>
+                <View style={styles.amountContainer}>
+                  <Text style={styles.amount}>₹{expense.amount}</Text>
+                  <View style={styles.status}>
+                    <Text
+                      style={[
+                        styles.statusLabel,
+                        expense.approvalStatus?.toUpperCase() === 'APPROVED'
+                          ? styles.approvedStatus
+                          : expense.approvalStatus?.toUpperCase() === 'PENDING'
+                            ? styles.pendingStatus
+                            : styles.rejectedStatus,
+                      ]}
+                    >
+                      {expense.approvalStatus?.toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.description}>
+                  <Ionicons name="chatbubble-outline" size={20} color="#6C63FF" />
+                  <Text style={styles.descriptionText}>{expense.description}</Text>
+                </View>
+                {expense.attachmentResponse && expense.attachmentResponse.length > 0 && (
+                  <View style={styles.attachmentContainer}>
+                    <Text style={styles.attachmentLabel}>Attachments:</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.attachmentScroll}>
+                      {expense.attachmentResponse.map((attachment, index) => (
+                        <ExpenseImage
+                          key={index}
+                          expenseId={expense.id}
+                          fileName={attachment.fileName}
+                          authToken={authToken}
+                          onPress={() => {
+                            console.log('Viewing attachment - GET call:', {
+                              expenseId: expense.id,
+                              fileName: attachment.fileName,
+                            });
+                          }}
+                        />
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            </View>
+          ))}
+          {filteredExpenses.length === 0 && (
+            <View style={styles.emptyState}>
+              <Ionicons name="receipt-outline" size={30} color="#9CA3AF" />
+              <Text style={styles.emptyStateText}>No expenses for this month</Text>
+            </View>
+          )}
+        </ScrollView>
+      </View>
       <Modal
         visible={isBottomSheetOpen}
         animationType="slide"
@@ -420,17 +470,20 @@ const ExpenseTracker = () => {
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetHeaderText}>Add Expense</Text>
               <TouchableOpacity onPress={handleCloseBottomSheet}>
-                <Ionicons name="close" size={24} color="#fff" />
+                <Ionicons name="close" size={24} color="#6C63FF" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.sheetBody}>
+            <ScrollView style={styles.sheetBody} keyboardShouldPersistTaps="handled">
+              {formError ? <Text accessibilityRole="alert" style={{ color: '#BE123C', marginBottom: 12 }}>{formError}</Text> : null}
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Expense Type</Text>
                 <TouchableOpacity
                   style={styles.expenseTypeSelect}
                   onPress={() => setIsExpenseTypeSheetOpen(true)}
                 >
-                  <Text style={styles.input}>{expenseType}</Text>
+                  <Text style={[styles.input, !expenseType && { color: '#9CA3AF' }]}>
+                    {expenseType || 'Select Expense Type'}
+                  </Text>
                   <Ionicons name="chevron-down" size={20} color="#6C63FF" />
                 </TouchableOpacity>
               </View>
@@ -495,8 +548,8 @@ const ExpenseTracker = () => {
                 )}
               </View>
             </ScrollView>
-            <TouchableOpacity 
-              style={[styles.submitButton, isUploading && styles.submitButtonDisabled]} 
+            <TouchableOpacity
+              style={[styles.submitButton, isUploading && styles.submitButtonDisabled]}
               onPress={handleSubmitExpense}
               disabled={isUploading}
             >
@@ -518,16 +571,40 @@ const ExpenseTracker = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-    padding: 20,
+    backgroundColor: '#F6F7FB',
   },
-  filtersContainer: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E9EAF0',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  headerSpacer: {
+    width: 40,
+    height: 40,
+  },
+  content: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+  },
+  filtersContainer: {
+    marginBottom: 12,
   },
   backButton: {
-    marginRight: 10,
+    width: 40,
+    height: 40,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   filters: {
     flexDirection: 'row',
@@ -537,23 +614,29 @@ const styles = StyleSheet.create({
   monthFilter: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f2f2f2',
-    borderRadius: 20,
-    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 10,
     paddingHorizontal: 12,
     marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   yearFilter: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f2f2f2',
-    borderRadius: 20,
-    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 10,
     paddingHorizontal: 12,
     marginLeft: 'auto',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   filterText: {
-    fontSize: 16,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
     marginLeft: 8,
   },
   addExpenseButton: {
@@ -561,8 +644,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#6C63FF',
-    borderRadius: 20,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     marginBottom: 16,
     width: '100%',
@@ -571,32 +654,34 @@ const styles = StyleSheet.create({
       width: 0,
       height: 2,
     },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 4,
   },
   addExpenseButtonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#fff',
     marginLeft: 8,
   },
   expenseList: {
     flex: 1,
   },
+  expenseListContent: {
+    paddingBottom: 24,
+  },
   expenseCard: {
     backgroundColor: '#fff',
-    borderRadius: 8,
+    borderRadius: 14,
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-    marginBottom: 16,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+    marginBottom: 12,
     padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -641,7 +726,7 @@ const styles = StyleSheet.create({
     color: '#6C63FF',
   },
   status: {
-    backgroundColor: '#E0F7EA',
+    backgroundColor: '#F3F4F6',
     borderRadius: 20,
     paddingVertical: 6,
     paddingHorizontal: 12,
@@ -665,8 +750,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   descriptionText: {
-    fontSize: 16,
-    color: '#555',
+    fontSize: 14,
+    color: '#4B5563',
     marginLeft: 8,
   },
   bottomSheet: {
@@ -690,12 +775,12 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f2f2f2',
-    backgroundColor: '#6C63FF',
+    backgroundColor: '#FFFFFF',
   },
   sheetHeaderText: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontWeight: '700',
+    color: '#1F2937',
   },
   sheetBody: {
     padding: 24,
@@ -863,6 +948,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#f5f5f5',
   },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 56,
+  },
+  emptyStateText: {
+    marginTop: 10,
+    color: '#6B7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
 });
 
 // Component to handle authenticated image loading
@@ -874,8 +970,8 @@ const ExpenseImage = ({ expenseId, fileName, authToken, onPress }) => {
   useEffect(() => {
     const loadImage = async () => {
       try {
-        const imageUrl = `https://api.gajkesaristeels.in/expense/downloadFile/${expenseId}/expense/${fileName}`;
-        
+        const imageUrl = `${API_BASE_URL}/expense/downloadFile/${expenseId}/expense/${fileName}`;
+
         console.log('Fetching expense image - GET call:', {
           expenseId,
           fileName,

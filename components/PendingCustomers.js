@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -42,7 +43,7 @@ const PendingCustomers = ({ authToken, onCustomerCreated }) => {
       // First check if customer exists
       try {
         const checkResponse = await axios.get(
-          `https://api.gajkesaristeels.in/store/getByPhone?phone=${customer.primaryContact}`,
+          `${API_BASE_URL}/store/getByPhone?phone=${customer.primaryContact}`,
           {
             headers: { Authorization: `Bearer ${authToken}` },
           }
@@ -58,6 +59,14 @@ const PendingCustomers = ({ authToken, onCustomerCreated }) => {
           return;
         }
       } catch (checkError) {
+        console.error('Error checking pending store before creation:', {
+          status: checkError.response?.status,
+          response: checkError.response?.data,
+          method: checkError.config?.method?.toUpperCase(),
+          url: checkError.config?.url,
+          message: checkError.message,
+        });
+
         // If we get 406 with "Store Not Found", that's good - proceed to create
         if (checkError.response?.status !== 406 || 
             !checkError.response?.data?.includes('Store Not Found')) {
@@ -79,7 +88,7 @@ const PendingCustomers = ({ authToken, onCustomerCreated }) => {
       console.log('Creating customer with payload:', createPayload); // Debug log
 
       const createResponse = await axios.post(
-        'https://api.gajkesaristeels.in/store/create',
+        `${API_BASE_URL}/store/create`,
         createPayload,
         {
           headers: {
@@ -98,8 +107,14 @@ const PendingCustomers = ({ authToken, onCustomerCreated }) => {
           alert('Customer created successfully!');
         }
       }
-    } catch (error) {
-      console.error('Error processing pending customer:', error);
+      } catch (error) {
+      console.error('Error creating store from pending customer:', {
+        status: error.response?.status,
+        response: error.response?.data,
+        method: error.config?.method?.toUpperCase(),
+        url: error.config?.url,
+        message: error.message,
+      });
       if (!error.response || error.message === 'Network Error') {
         alert('Network error. Customer will remain in pending list.');
       } else if (error.message === 'Employee ID not found') {

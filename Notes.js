@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
@@ -15,7 +16,7 @@ const Notes = ({ visitId, storeId, authToken, readOnly, onNotesUpdated = () => {
 
   const fetchNotes = async () => {
     try {
-      const response = await axios.get(`https://api.gajkesaristeels.in/notes/getByVisit?id=${visitId}`, {
+      const response = await axios.get(`${API_BASE_URL}/notes/getByVisit?id=${visitId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -41,7 +42,7 @@ const Notes = ({ visitId, storeId, authToken, readOnly, onNotesUpdated = () => {
       setIsAdding(true);
       const employeeId = await AsyncStorage.getItem('employeeId');
       const response = await axios.post(
-        'https://api.gajkesaristeels.in/notes/create',
+        `${API_BASE_URL}/notes/create`,
         {
           content: newNote,
           employeeId: employeeId,

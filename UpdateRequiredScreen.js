@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,7 +11,7 @@ const UpdateRequiredScreen = ({ route }) => {
 
   const handleLogout = async () => {
     try {
-      await axios.post('https://api.gajkesaristeels.in/user/logout', null, {
+      await axios.post(`${API_BASE_URL}/user/logout`, null, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },

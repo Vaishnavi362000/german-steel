@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useRef } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, Image, Alert } from 'react-native';
 import { Camera } from 'expo-camera';
@@ -30,7 +31,7 @@ const CameraScreen = ({ navigation, route }) => {
       });
 
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/visit/uploadFile?id=${visitId}&tag=check-in`,
+        `${API_BASE_URL}/visit/uploadFile?id=${visitId}&tag=check-in`,
         formData,
         {
           headers: {

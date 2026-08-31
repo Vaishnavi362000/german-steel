@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import axios from 'axios';
@@ -14,7 +15,7 @@ export default function LikesSection({ storeId, authToken }) {
   const fetchLikes = async () => {
     try {
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/store/getById?id=${storeId}`,
+        `${API_BASE_URL}/store/getById?id=${storeId}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -42,7 +43,7 @@ export default function LikesSection({ storeId, authToken }) {
       try {
         const payload = { likes: updatedLikes };
         await axios.put(
-          `https://api.gajkesaristeels.in/store/edit?id=${storeId}`,
+          `${API_BASE_URL}/store/edit?id=${storeId}`,
           payload,
           {
             headers: {
@@ -65,7 +66,7 @@ export default function LikesSection({ storeId, authToken }) {
     try {
       const payload = { likes: updatedLikes };
       await axios.put(
-        `https://api.gajkesaristeels.in/store/edit?id=${storeId}`,
+        `${API_BASE_URL}/store/edit?id=${storeId}`,
         payload,
         {
           headers: {

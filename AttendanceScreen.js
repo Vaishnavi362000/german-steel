@@ -1,5 +1,6 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView, FlatList, TextInput, Alert, Dimensions, Modal as RNModal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView, FlatList, TextInput, Alert, Dimensions, Modal as RNModal, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { BarChart } from 'react-native-chart-kit';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,16 +8,18 @@ import Modal from 'react-native-modal';
 import { Calendar } from 'react-native-calendars';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { summarizeAttendanceDays, isPaidLeaveDate } from './utils/attendanceSummary';
 
 const AttendanceScreen = () => {
+    const { width: windowWidth, height: windowHeight } = useWindowDimensions();
     const [attendanceData, setAttendanceData] = useState({
         totalDays: 30,
         fullDays: 0,
         halfDays: 0,
-        leaves: 0,
-        holidays: 0,
+        absentDays: 0,
+        paidLeaveDays: 0,
     });
     const [totalVisits, setTotalVisits] = useState(0);
     const [totalStores, setTotalStores] = useState(0);
@@ -25,6 +28,9 @@ const AttendanceScreen = () => {
     const [authToken, setAuthToken] = useState(null);
     const [employeeId, setEmployeeId] = useState(null);
     const navigation = useNavigation();
+    const isFocused = useIsFocused();
+    const [requestNotice, setRequestNotice] = useState('');
+    const [attendanceLoadError, setAttendanceLoadError] = useState('');
     const currentDate = new Date();
     const currentMonth = currentDate.toLocaleString('default', { month: 'long' });
     const currentYear = currentDate.getFullYear();
@@ -47,6 +53,44 @@ const AttendanceScreen = () => {
     const [regularizationRequests, setRegularizationRequests] = useState([]);
     const [isPickerVisible, setPickerVisible] = useState(false);
     const [isReasonPickerVisible, setIsReasonPickerVisible] = useState(false);
+    const [regularizationSubmitError, setRegularizationSubmitError] = useState(null);
+    const [isSubmittingRegularization, setIsSubmittingRegularization] = useState(false);
+    const [requestDateCheck, setRequestDateCheck] = useState({ date: '', status: 'checking' });
+    const requestDateKey = format(regularizationDate, 'yyyy-MM-dd');
+    const requestDateStatus = isPaidLeaveDate(requestDateKey) ? 'paid'
+        : requestDateCheck.date === requestDateKey ? requestDateCheck.status : 'checking';
+    const canSubmitRequest = requestDateStatus === 'allowed' && !isSubmittingRegularization;
+
+    const getRequestDateRecords = async (dateKey, token, id) => {
+        if (!token || !id) throw new Error('Sign in required');
+        const response = await axios.get(`${API_BASE_URL}/salary-calculation/daily-breakdown?employeeId=${id}&startDate=${dateKey}&endDate=${dateKey}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!Array.isArray(response.data)) throw new Error('Invalid attendance response');
+        return response.data.filter((row) => String(row.employeeId) === String(id));
+    };
+
+    useEffect(() => {
+        if (!isRegularizationModalVisible) return;
+        let active = true;
+        if (isPaidLeaveDate(requestDateKey)) {
+            setRequestDateCheck({ date: requestDateKey, status: 'paid' });
+            return;
+        }
+        setRequestDateCheck({ date: requestDateKey, status: 'checking' });
+        const checkDate = async () => {
+            try {
+                const token = await AsyncStorage.getItem('userToken');
+                const id = await AsyncStorage.getItem('employeeId');
+                const records = await getRequestDateRecords(requestDateKey, token, id);
+                if (active) setRequestDateCheck({ date: requestDateKey, status: isPaidLeaveDate(requestDateKey, records) ? 'paid' : 'allowed' });
+            } catch {
+                if (active) setRequestDateCheck({ date: requestDateKey, status: 'error' });
+            }
+        };
+        checkDate();
+        return () => { active = false; };
+    }, [requestDateKey, isRegularizationModalVisible]);
     
     const reasonOptions = [
         'Office meeting',
@@ -86,73 +130,111 @@ const AttendanceScreen = () => {
     }, [regularizationDate, regularizationRequests]);
 
     useEffect(() => {
+        if (!isFocused) return;
         fetchAttendanceData();
-        fetchRegularizationRequests();
-    }, [selectedMonth, selectedYear, authToken]);
+        const timer = setInterval(fetchAttendanceData, 15000);
+        return () => clearInterval(timer);
+    }, [selectedMonth, selectedYear, authToken, isFocused]);
 
-    const getSundaysPassed = (month, year, day) => {
-        let count = 0;
-        const date = new Date(year, month, 1);
-
-        while (date.getMonth() === month && date.getDate() <= day) {
-            if (date.getDay() === 0) {
-                count++;
-            }
-            date.setDate(date.getDate() + 1);
-        }
-        return count;
-    };
+    useEffect(() => {
+        if (!requestNotice) return;
+        const timer = setTimeout(() => setRequestNotice(''), 3000);
+        return () => clearTimeout(timer);
+    }, [requestNotice]);
 
     const fetchAttendanceData = async () => {
         try {
             const token = await AsyncStorage.getItem('userToken');
             const id = await AsyncStorage.getItem('employeeId');
             const monthIndex = months.indexOf(selectedMonth);
-            const isCurrentMonth = monthIndex === currentDate.getMonth() && selectedYear == currentDate.getFullYear();
-            const currentDay = isCurrentMonth ? currentDate.getDate() : new Date(selectedYear, monthIndex + 1, 0).getDate();
 
-            const response = await axios.get(`https://api.gajkesaristeels.in/attendance-log/monthlyVisits?date=${selectedYear}-${String(monthIndex + 1).padStart(2, '0')}-01&employeeId=${id}`, {
+            const response = await axios.get(`${API_BASE_URL}/attendance-log/monthlyVisits?date=${selectedYear}-${String(monthIndex + 1).padStart(2, '0')}-01&employeeId=${id}`, {
                 headers: {
                     Authorization: `Bearer ${token}`,
                 },
             });
             const data = response.data;
 
-            const sundaysPassed = getSundaysPassed(monthIndex, selectedYear, currentDay);
-            const totalDays = isCurrentMonth ? currentDay : new Date(selectedYear, monthIndex + 1, 0).getDate();
-
-            setAttendanceData({
-                totalDays: totalDays,
-                fullDays: data.statsDto.fullDays,
-                halfDays: data.statsDto.halfDays,
-                leaves: totalDays - data.statsDto.fullDays - data.statsDto.halfDays - sundaysPassed,
-                holidays: sundaysPassed,
+            const startDate = format(new Date(Number(selectedYear), monthIndex, 1), 'yyyy-MM-dd');
+            const endDate = format(new Date(Number(selectedYear), monthIndex + 1, 0), 'yyyy-MM-dd');
+            // Employee-scoped daily records avoid double-counting approved Sunday requests.
+            const dailyResponse = await axios.get(`${API_BASE_URL}/salary-calculation/daily-breakdown?employeeId=${id}&startDate=${startDate}&endDate=${endDate}`, {
+                headers: { Authorization: `Bearer ${token}` },
             });
+            if (!Array.isArray(dailyResponse.data)) throw new Error('Invalid daily attendance response');
+            const ownRecords = dailyResponse.data.filter((row) => String(row.employeeId) === String(id));
+            setAttendanceData(summarizeAttendanceDays(ownRecords, Number(selectedYear), monthIndex));
+            setAttendanceLoadError('');
             setTotalVisits(data.monthlyCount);
             setTotalStores(data.uniqueStoreCount);
 
             // Fetch regularization requests after attendance data is fetched
             fetchRegularizationRequests();
         } catch (error) {
-            console.error('Error fetching attendance data:', error);
+            setAttendanceLoadError('Could not refresh attendance. The totals may be out of date. Please try again.');
         }
     };
 
     const fetchRegularizationRequests = async () => {
         try {
             const token = await AsyncStorage.getItem('userToken');
+            const currentEmployeeId = await AsyncStorage.getItem('employeeId');
             const startDate = startOfMonth(new Date(selectedYear, months.indexOf(selectedMonth)));
             const endDate = endOfMonth(new Date(selectedYear, months.indexOf(selectedMonth)));
 
+            if (!currentEmployeeId) {
+                console.warn('[Attendance] Unable to scope attendance requests: no employee ID is stored.');
+                setRegularizationRequests([]);
+                return;
+            }
+
+            const requestRange = {
+                start: format(startDate, 'yyyy-MM-dd'),
+                end: format(endDate, 'yyyy-MM-dd'),
+            };
+
+            console.log('[Attendance] getByDateRange request', {
+                employeeId: currentEmployeeId,
+                ...requestRange,
+            });
+
             const response = await axios.get(
-                `https://api.gajkesaristeels.in/request/getByDateRange?start=${format(startDate, 'yyyy-MM-dd')}&end=${format(endDate, 'yyyy-MM-dd')}`,
+                `${API_BASE_URL}/request/getByDateRange?start=${requestRange.start}&end=${requestRange.end}`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
                     },
                 }
             );
-            setRegularizationRequests(response.data);
+
+            const allRequests = Array.isArray(response.data) ? response.data : [];
+            const employeeRequests = allRequests.filter((request) => {
+                const requestEmployeeId = request?.employeeId ?? request?.employee?.id ?? request?.employee?.employeeId;
+                return String(requestEmployeeId ?? '') === String(currentEmployeeId);
+            });
+            const unscopedCount = allRequests.length - employeeRequests.length;
+
+            console.log('[Attendance] getByDateRange response', {
+                employeeId: currentEmployeeId,
+                receivedCount: allRequests.length,
+                visibleCount: employeeRequests.length,
+                requests: employeeRequests.map((request) => ({
+                    id: request.id,
+                    employeeId: request.employeeId,
+                    logDate: request.logDate,
+                    requestedStatus: request.requestedStatus,
+                    status: request.status,
+                })),
+            });
+
+            if (unscopedCount > 0) {
+                console.warn('[Attendance] The API returned attendance requests for other employees. They were hidden in the mobile UI, but the backend endpoint must enforce this scope.', {
+                    currentEmployeeId,
+                    unscopedCount,
+                });
+            }
+
+            setRegularizationRequests(employeeRequests);
         } catch (error) {
             console.error('Error fetching regularization requests:', error);
             Alert.alert('Error', 'Failed to fetch regularization requests. Please try again.');
@@ -174,25 +256,29 @@ const AttendanceScreen = () => {
     };
 
     const handleRegularizationRequest = async () => {
+        if (!canSubmitRequest) {
+            return;
+        }
+
+        setRegularizationSubmitError(null);
+        setIsSubmittingRegularization(true);
+
         try {
             // Validate reason
             if (!regularizationReason) {
-                Alert.alert('Reason required', 'Please select a reason for this request.');
+                setRegularizationSubmitError({ type: 'generic', title: 'Reason required', message: 'Select a reason for your attendance request.' });
                 return;
             }
 
             // Validate custom reason if "Other" is selected
             if (regularizationReason === 'Other' && (!regularizationCustomReason || regularizationCustomReason.trim().length < 3)) {
-                Alert.alert('Custom reason required', 'Please enter a custom reason (at least 3 characters).');
+                setRegularizationSubmitError({ type: 'generic', title: 'Reason required', message: 'Enter a reason with at least 3 characters.' });
                 return;
             }
 
             // Validate description
             if (!regularizationDescription || regularizationDescription.trim().length < 10) {
-                Alert.alert(
-                    'Description required',
-                    'Please briefly explain why you want to change this day\'s attendance (at least 10 characters).'
-                );
+                setRegularizationSubmitError({ type: 'generic', title: 'Details required', message: 'Explain your request in at least 10 characters.' });
                 return;
             }
 
@@ -205,12 +291,19 @@ const AttendanceScreen = () => {
             twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
             if (selectedDate < twoDaysAgo) {
-                Alert.alert('Invalid Date', 'You can request changes only for dates from 2 days ago onwards.');
+                setRegularizationSubmitError({ type: 'generic', title: 'Invalid attendance date', message: 'Choose a date from two days ago onwards.' });
                 return;
             }
 
             const token = await AsyncStorage.getItem('userToken');
             const employeeId = await AsyncStorage.getItem('employeeId');
+            // Recheck immediately before creating: an admin may have changed the day
+            // while this form was open. Never create a request on Paid Leave.
+            const dateRecords = await getRequestDateRecords(requestDateKey, token, employeeId);
+            if (isPaidLeaveDate(requestDateKey, dateRecords)) {
+                setRequestDateCheck({ date: requestDateKey, status: 'paid' });
+                return;
+            }
 
             // Determine the reason value - use custom reason if "Other" is selected
             const reasonValue = regularizationReason === 'Other' 
@@ -228,7 +321,7 @@ const AttendanceScreen = () => {
             console.log('Create Regularization Request Payload:', JSON.stringify(requestPayload, null, 2));
 
             const response = await axios.post(
-                'https://api.gajkesaristeels.in/request/create',
+                `${API_BASE_URL}/request/create`,
                 requestPayload,
                 {
                     headers: {
@@ -241,13 +334,16 @@ const AttendanceScreen = () => {
 
             if (response.status === 200 || response.status === 201) {
                 setRegularizationModalVisible(false);
+                setPickerVisible(false);
+                setIsReasonPickerVisible(false);
                 // Reset the form silently
                 setRegularizationDate(new Date());
                 setRegularizationStatus('Full Day');
                 setRegularizationDescription('');
                 setRegularizationReason('');
                 setRegularizationCustomReason('');
-                // Remove success alert
+                setRegularizationSubmitError(null);
+                setRequestNotice('Attendance request submitted. Pending approval.');
                 fetchRegularizationRequests();
             } else {
                 throw new Error('Failed to create regularization request');
@@ -255,14 +351,29 @@ const AttendanceScreen = () => {
         } catch (error) {
             console.error('Error creating regularization request:', error);
             console.log('Request Error Response:', error.response?.data);
-            Alert.alert('Error', 'Failed to submit regularization request. Please try again.');
+            const responseData = error?.response?.data || {};
+            const isDuplicateRequest = error?.response?.status === 409 || responseData?.code === 'DUPLICATE_DATA';
+
+            setRegularizationSubmitError({
+                type: isDuplicateRequest ? 'duplicate' : 'generic',
+                title: isDuplicateRequest ? 'Attendance request already exists' : 'Unable to submit request',
+                message: isDuplicateRequest
+                    ? `You already have an attendance request for ${format(regularizationDate, 'd MMM yyyy')}. Check its status below or choose another date.`
+                    : 'We could not submit your request. Please check your connection and try again.',
+            });
+        } finally {
+            setIsSubmittingRegularization(false);
         }
     };
 
-    const renderBottomSheet = (data, onSelect, isVisible, onClose, title) => (
+    const renderBottomSheet = (data, onSelect, isVisible, onClose, title, coverScreen = true) => (
         <Modal
+            coverScreen={coverScreen}
+            deviceWidth={windowWidth}
+            deviceHeight={windowHeight}
             isVisible={isVisible}
             onBackdropPress={onClose}
+            onBackButtonPress={onClose}
             style={styles.bottomModal}
             swipeDirection="down"
             onSwipeComplete={onClose}
@@ -281,7 +392,7 @@ const AttendanceScreen = () => {
                     data={data}
                     keyExtractor={(item) => item}
                     renderItem={({ item }) => (
-                        <TouchableOpacity style={styles.bottomSheetItem} onPress={() => onSelect(item)}>
+                        <TouchableOpacity accessibilityRole="button" style={styles.bottomSheetItem} onPress={() => onSelect(item)}>
                             <Text style={styles.bottomSheetItemText}>{item}</Text>
                         </TouchableOpacity>
                     )}
@@ -290,121 +401,129 @@ const AttendanceScreen = () => {
         </Modal>
     );
 
+    const toAttendanceNumber = (value) => {
+        const numericValue = Number(value);
+        return Number.isFinite(numericValue) ? numericValue : 0;
+    };
+
+    const attendanceSummaryItems = [
+        { icon: 'calendar-check', label: 'Total Days', value: toAttendanceNumber(attendanceData.totalDays), color: '#6C63FF', tint: '#F0F0FF' },
+        { icon: 'sun', label: 'Full Days', value: toAttendanceNumber(attendanceData.fullDays), color: '#2FA36B', tint: '#EAF7F0' },
+        { icon: 'cloud-sun', label: 'Half Days', value: toAttendanceNumber(attendanceData.halfDays), color: '#F97316', tint: '#FFF4E8' },
+        { icon: 'calendar-check', label: 'Paid Leave', value: toAttendanceNumber(attendanceData.paidLeaveDays), color: '#7C3AED', tint: '#F5F3FF' },
+        { icon: 'times-circle', label: 'Absent', value: toAttendanceNumber(attendanceData.absentDays), color: '#BE123C', tint: '#FFF1F2' },
+    ];
+    // Keep chart labels, values, order, and colors aligned with the summary.
+    const attendanceBars = attendanceSummaryItems.slice(1);
+    const maxAttendanceValue = Math.max(12, ...attendanceBars.map((item) => item.value));
+
     return (
         <SafeAreaView style={styles.container}>
-            <ScrollView>
-                <View style={styles.header}>
-                    <TouchableOpacity style={styles.backButton} onPress={goBack}>
-                        <Ionicons name="chevron-back" size={24} color="#333" />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>My Attendance</Text>
-                </View>
+            {attendanceLoadError ? <Text accessibilityRole="alert" style={{ color: '#BE123C', padding: 12 }}>{attendanceLoadError}</Text> : null}
+            <View style={styles.header}>
+                <TouchableOpacity style={styles.backButton} onPress={goBack} accessibilityLabel="Go back">
+                    <Icon name="chevron-left" size={22} color="#6C63FF" />
+                </TouchableOpacity>
+                <Text style={styles.headerTitle}>My Attendance</Text>
+                <View style={styles.headerSpacer} />
+            </View>
+            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 <View style={styles.filtersContainer}>
                     <TouchableOpacity style={[styles.filterItem, styles.cardShadow]} onPress={() => setMonthPickerVisible(true)}>
                         <Icon name="calendar-alt" size={18} color="#6C63FF" style={styles.filterIcon} />
                         <Text style={styles.filterText}>{selectedMonth}</Text>
+                        <Icon name="chevron-down" size={12} color="#666" style={styles.filterChevron} />
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.filterItem, styles.cardShadow]} onPress={() => setYearPickerVisible(true)}>
                         <Icon name="calendar" size={18} color="#6C63FF" style={styles.filterIcon} />
                         <Text style={styles.filterText}>{selectedYear}</Text>
+                        <Icon name="chevron-down" size={12} color="#666" style={styles.filterChevron} />
                     </TouchableOpacity>
                 </View>
                 <View style={[styles.kpiSection, styles.cardShadow]}>
-                    <View style={styles.kpiItem}>
-                        <Icon name="calendar-check" size={36} color="#6C63FF" />
-                        <Text style={styles.kpiValue}>{attendanceData.totalDays}</Text>
-                        <Text style={styles.kpiLabel}>Total Days</Text>
+                    <View style={styles.summaryHeader}>
+                        <View style={styles.summaryIcon}>
+                            <Icon name="calendar-alt" size={26} color="#6C63FF" />
+                        </View>
+                        <View style={styles.summaryTitleWrap}>
+                            <Text style={styles.summaryTitle}>Month Summary</Text>
+                            <Text style={styles.summarySubtitle}>{selectedMonth} {selectedYear}</Text>
+                        </View>
                     </View>
-                    <View style={styles.kpiItem}>
-                        <Icon name="sun" size={36} color="#6C63FF" />
-                        <Text style={styles.kpiValue}>{attendanceData.fullDays}</Text>
-                        <Text style={styles.kpiLabel}>Full Days</Text>
-                    </View>
-                    <View style={styles.kpiItem}>
-                        <Icon name="cloud-sun" size={36} color="#6C63FF" />
-                        <Text style={styles.kpiValue}>{attendanceData.halfDays}</Text>
-                        <Text style={styles.kpiLabel}>Half Days</Text>
-                    </View>
-                    <View style={styles.kpiItem}>
-                        <Icon name="plane-departure" size={36} color="#6C63FF" />
-                        <Text style={styles.kpiValue}>{attendanceData.leaves}</Text>
-                        <Text style={styles.kpiLabel}>Leaves</Text>
-                    </View>
-                    <View style={styles.kpiItem}>
-                        <Icon name="umbrella-beach" size={36} color="#6C63FF" />
-                        <Text style={styles.kpiValue}>{attendanceData.holidays}</Text>
-                        <Text style={styles.kpiLabel}>Holidays</Text>
+                    <View style={styles.summaryStatsCard}>
+                        {attendanceSummaryItems.map((item, index) => (
+                            <View key={item.label} style={styles.summaryStatWrap}>
+                                <View style={styles.kpiItem}>
+                                    <View style={[styles.statIconCircle, { backgroundColor: item.tint }]}>
+                                        <Icon name={item.icon} size={18} color={item.color} />
+                                    </View>
+                                    <Text style={styles.kpiLabel} numberOfLines={2}>{item.label}</Text>
+                                    <Text style={[styles.kpiValue, { color: item.color }]}>{item.value}</Text>
+                                </View>
+                                {index < attendanceSummaryItems.length - 1 && <View style={styles.summaryDivider} />}
+                            </View>
+                        ))}
                     </View>
                 </View>
                 <View style={[styles.chartSection, styles.cardShadow]}>
-                    <Text style={styles.chartTitle}>Attendance Breakdown</Text>
-                    <BarChart
-                        data={{
-                            labels: ['Full Days', 'Half Days', 'Leaves', 'Holidays'],
-                            datasets: [
-                                {
-                                    data: [
-                                        attendanceData.fullDays,
-                                        attendanceData.halfDays,
-                                        attendanceData.leaves,
-                                        attendanceData.holidays,
-                                    ],
-                                },
-                            ],
-                        }}
-                        width={Dimensions.get('window').width - 80}
-                        height={200}
-                        yAxisLabel=""
-                        yAxisSuffix=""
-                        chartConfig={{
-                            backgroundColor: '#fff',
-                            backgroundGradientFrom: '#fff',
-                            backgroundGradientTo: '#fff',
-                            decimalPlaces: 0,
-                            color: (opacity = 1) => `rgba(108, 99, 255, ${opacity})`,
-                            style: {
-                                borderRadius: 16,
-                            },
-                            barPercentage: 0.5,
-                        }}
-                        fromZero={true}
-                        showBarTops={false}
-                        showValuesOnTopOfBars={false}
-                        withHorizontalLabels={true}
-                        withInnerLines={false}
-                        withOuterLines={false}
-                        style={{
-                            marginVertical: 8,
-                            borderRadius: 16,
-                        }}
-                    />
+                    <View style={styles.cardTitleRow}>
+                        <View style={styles.cardTitleIcon}><Icon name="chart-bar" size={18} color="#6C63FF" /></View>
+                        <Text style={styles.chartTitle}>Attendance Breakdown</Text>
+                    </View>
+                    <View style={styles.chartBarsRow}>
+                        {attendanceBars.map((item) => {
+                            const barHeight = item.value > 0 ? Math.max(4, (item.value / maxAttendanceValue) * 100) : 0;
+                            return (
+                                <View key={item.label} style={styles.barColumn}>
+                                    <Text style={[styles.barValue, { color: item.color }]}>{item.value}</Text>
+                                    <View style={styles.barTrack}>
+                                        <View style={[styles.barFill, { height: `${barHeight}%`, backgroundColor: item.color }]} />
+                                    </View>
+                                    <Text style={styles.barLabel} numberOfLines={2}>{item.label}</Text>
+                                </View>
+                            );
+                        })}
+                    </View>
                 </View>
                 <View style={[styles.visitsStoresSection, styles.cardShadow]}>
                     <View style={styles.visitsSection}>
-                        <Icon name="walking" size={48} color="#6C63FF" />
-                        <Text style={styles.visitsValue}>{totalVisits}</Text>
-                        <Text style={styles.visitsLabel}>Total Visits</Text>
+                        <View style={styles.visitStoreIcon}><Icon name="walking" size={22} color="#6C63FF" /></View>
+                        <View style={styles.visitStoreTextWrap}>
+                            <Text style={styles.visitsLabel}>Total Visits</Text>
+                            <Text style={styles.visitsValue}>{totalVisits}</Text>
+                            <Text style={styles.thisMonthLabel}>This Month</Text>
+                        </View>
                     </View>
+                    <View style={styles.metricDivider} />
                     <View style={styles.storesSection}>
-                        <Icon name="store" size={48} color="#6C63FF" />
-                        <Text style={styles.storesValue}>{totalStores}</Text>
-                        <Text style={styles.storesLabel}>Total Stores</Text>
+                        <View style={styles.visitStoreIcon}><Icon name="store" size={22} color="#6C63FF" /></View>
+                        <View style={styles.visitStoreTextWrap}>
+                            <Text style={styles.storesLabel}>Total Stores</Text>
+                            <Text style={styles.storesValue}>{totalStores}</Text>
+                            <Text style={styles.thisMonthLabel}>This Month</Text>
+                        </View>
                     </View>
                 </View>
                 <TouchableOpacity
                     style={styles.regularizationButton}
-                    onPress={() => setRegularizationModalVisible(true)}
+                    onPress={() => {
+                        setRegularizationSubmitError(null);
+                        setRegularizationModalVisible(true);
+                    }}
                 >
-                    <Text style={styles.regularizationButtonText}>Mark Attendance</Text>
+                    <Icon name="clipboard-list" size={18} color="#fff" style={styles.regularizationButtonIcon} />
+                    <Text style={styles.regularizationButtonText}>Request attendance change</Text>
                 </TouchableOpacity>
 
                 <View style={styles.requestsContainer}>
-                    <Text style={styles.requestsTitle}>Attendance Requests</Text>
+                    <Text style={styles.requestsTitle}>Attendance requests</Text>
+                    {requestNotice ? <Text accessibilityRole="alert" style={styles.requestDescription}>{requestNotice}</Text> : null}
                     {regularizationRequests.map((request) => (
                         <View key={request.id} style={styles.requestItem}>
                             <View style={styles.requestInfo}>
                                 <Text style={styles.requestDate}>{format(new Date(request.logDate), 'MMM d, yyyy')}</Text>
-                                <Text style={styles.requestStatus}>{request.requestedStatus}</Text>
+                                <Text style={styles.requestStatus}>{request.requestedStatus?.toLowerCase() === 'half day' ? 'Half Day' : 'Full Day'}</Text>
+                                {request.reason ? <Text style={styles.requestDescription}>{request.reason}</Text> : null}
                                 {request.description ? (
                                     <Text style={styles.requestDescription} numberOfLines={2}>
                                         {request.description}
@@ -412,7 +531,7 @@ const AttendanceScreen = () => {
                                 ) : null}
                             </View>
                             <View style={[styles.requestStatusBadge, styles[request.status.toLowerCase()]]}>
-                                <Text style={styles.requestStatusText}>{request.status}</Text>
+                                <Text style={styles.requestStatusText}>{request.status?.charAt(0).toUpperCase() + request.status?.slice(1).toLowerCase()}</Text>
                             </View>
                         </View>
                     ))}
@@ -422,37 +541,73 @@ const AttendanceScreen = () => {
             </ScrollView>
             {renderBottomSheet(months, handleMonthChange, isMonthPickerVisible, () => setMonthPickerVisible(false), 'Select Month')}
             {renderBottomSheet(years, handleYearChange, isYearPickerVisible, () => setYearPickerVisible(false), 'Select Year')}
-            {renderBottomSheet(reasonOptions, (reason) => {
-                setRegularizationReason(reason);
-                setIsReasonPickerVisible(false);
-                if (reason !== 'Other') {
-                    setRegularizationCustomReason('');
-                }
-            }, isReasonPickerVisible, () => setIsReasonPickerVisible(false), 'Select Reason')}
             <Modal
                 isVisible={isRegularizationModalVisible}
+                deviceWidth={windowWidth}
+                deviceHeight={windowHeight}
+                onBackButtonPress={() => {
+                    if (isReasonPickerVisible) setIsReasonPickerVisible(false);
+                    else setRegularizationModalVisible(false);
+                }}
                 onBackdropPress={() => {
+                    if (isReasonPickerVisible) {
+                        setIsReasonPickerVisible(false);
+                        return;
+                    }
                     setRegularizationModalVisible(false);
                     setRegularizationDescription('');
                     setRegularizationReason('');
                     setRegularizationCustomReason('');
+                    setRegularizationSubmitError(null);
                 }}
                 style={styles.bottomModal}
             >
-                <View style={styles.modalContent}>
+                <ScrollView style={{ maxHeight: '90%' }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
                     <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Mark Attendance</Text>
+                        <Text style={styles.modalTitle}>Request attendance change</Text>
                         <TouchableOpacity onPress={() => {
+                            setIsReasonPickerVisible(false);
                             setRegularizationModalVisible(false);
                             setRegularizationDescription('');
                             setRegularizationReason('');
                             setRegularizationCustomReason('');
+                            setRegularizationSubmitError(null);
                         }}>
                             <Ionicons name="close" size={24} color="#333" />
                         </TouchableOpacity>
                     </View>
 
-                    <Text style={styles.label}>Date</Text>
+                    {regularizationSubmitError && (
+                        <View
+                            style={[
+                                styles.regularizationErrorCard,
+                                regularizationSubmitError.type === 'generic' && styles.regularizationErrorCardGeneric,
+                            ]}
+                            accessibilityRole="alert"
+                        >
+                            <View style={styles.regularizationErrorIcon}>
+                                <Ionicons
+                                    name={regularizationSubmitError.type === 'duplicate' ? 'information-circle' : 'alert-circle'}
+                                    size={22}
+                                    color={regularizationSubmitError.type === 'duplicate' ? '#C2410C' : '#B91C1C'}
+                                />
+                            </View>
+                            <View style={styles.regularizationErrorCopy}>
+                                <Text style={styles.regularizationErrorTitle}>{regularizationSubmitError.title}</Text>
+                                <Text style={styles.regularizationErrorMessage}>{regularizationSubmitError.message}</Text>
+                            </View>
+                            <TouchableOpacity
+                                style={styles.regularizationErrorDismiss}
+                                onPress={() => setRegularizationSubmitError(null)}
+                                accessibilityLabel="Dismiss request error"
+                            >
+                                <Ionicons name="close" size={20} color="#6B7280" />
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
+                    <Text style={styles.descriptionHelper}>Submit a change for approval. Attendance updates only after approval.</Text>
+                    <Text style={styles.label}>Attendance date</Text>
                     <TouchableOpacity
                         style={styles.dateButton}
                         onPress={() => setPickerVisible(true)}
@@ -462,7 +617,17 @@ const AttendanceScreen = () => {
                         </Text>
                     </TouchableOpacity>
 
-                    <Text style={styles.label}>Requested Status</Text>
+                    {requestDateStatus !== 'allowed' && (
+                        <Text accessibilityRole="alert" style={styles.descriptionHelper}>
+                            {requestDateStatus === 'paid'
+                                ? 'This date is Paid Leave. No attendance request is needed. Please choose another date.'
+                                : requestDateStatus === 'error'
+                                    ? 'Could not check this date. Reopen the form to try again; requests are disabled until it is verified.'
+                                    : 'Checking attendance for this date…'}
+                        </Text>
+                    )}
+
+                    <Text style={styles.label}>Requested attendance</Text>
                     <View style={styles.statusButtons}>
                         <TouchableOpacity
                             style={[styles.statusButton, regularizationStatus === 'Full Day' && styles.selectedStatusButton]}
@@ -481,7 +646,10 @@ const AttendanceScreen = () => {
                     <Text style={styles.label}>Reason</Text>
                     <TouchableOpacity
                         style={styles.reasonSelectButton}
-                        onPress={() => setIsReasonPickerVisible(true)}
+                        onPress={() => setIsReasonPickerVisible(value => !value)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Select a reason"
+                        accessibilityState={{ expanded: isReasonPickerVisible }}
                     >
                         <Text style={[styles.reasonSelectText, !regularizationReason && styles.placeholderText]}>
                             {regularizationReason || 'Select a reason'}
@@ -502,7 +670,7 @@ const AttendanceScreen = () => {
                         </View>
                     )}
 
-                    <Text style={styles.label}>Why are you requesting this change?</Text>
+                    <Text style={styles.label}>Details</Text>
                     <Text style={styles.descriptionHelper}>
                         Share a short reason so your manager understands what happened.
                     </Text>
@@ -519,12 +687,27 @@ const AttendanceScreen = () => {
                     <Text style={styles.charCount}>{regularizationDescription.length}/250</Text>
 
                     <TouchableOpacity
-                        style={styles.submitButton}
+                        style={[styles.submitButton, !canSubmitRequest && styles.submitButtonDisabled]}
                         onPress={handleRegularizationRequest}
+                        disabled={!canSubmitRequest}
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: !canSubmitRequest, busy: isSubmittingRegularization }}
                     >
-                        <Text style={styles.submitButtonText}>Submit Request</Text>
+                        {isSubmittingRegularization ? (
+                            <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                            <Text style={styles.submitButtonText}>Submit request</Text>
+                        )}
                     </TouchableOpacity>
-                </View>
+                </ScrollView>
+                {/* Keep the picker in the form's native modal layer, above its content.
+                    A sibling native modal can appear behind it on web/iOS. */}
+                {renderBottomSheet(reasonOptions, (reason) => {
+                    setRegularizationReason(reason);
+                    setIsReasonPickerVisible(false);
+                    setRegularizationSubmitError(null);
+                    if (reason !== 'Other') setRegularizationCustomReason('');
+                }, isReasonPickerVisible, () => setIsReasonPickerVisible(false), 'Select Reason', false)}
             </Modal>
 
             <RNModal visible={isPickerVisible} transparent animationType="slide">
@@ -539,7 +722,8 @@ const AttendanceScreen = () => {
                             })()}
                             maxDate={undefined} // Allow future dates
                             onDayPress={(day) => {
-                                setRegularizationDate(new Date(day.dateString));
+                                setRegularizationDate(new Date(`${day.dateString}T00:00:00`));
+                                setRegularizationSubmitError(null);
                                 setPickerVisible(false);
                             }}
                             markedDates={markedDates}
@@ -738,15 +922,51 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
     },
+    regularizationErrorCard: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        backgroundColor: '#FFF7ED',
+        borderWidth: 1,
+        borderColor: '#FED7AA',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 16,
+    },
+    regularizationErrorCardGeneric: {
+        backgroundColor: '#FEF2F2',
+        borderColor: '#FECACA',
+    },
+    regularizationErrorIcon: {
+        marginTop: 1,
+    },
+    regularizationErrorCopy: {
+        flex: 1,
+        marginLeft: 10,
+    },
+    regularizationErrorTitle: {
+        color: '#1F2937',
+        fontSize: 14,
+        fontWeight: '700',
+        marginBottom: 3,
+    },
+    regularizationErrorMessage: {
+        color: '#4B5563',
+        fontSize: 13,
+        lineHeight: 18,
+    },
+    regularizationErrorDismiss: {
+        paddingLeft: 8,
+        paddingVertical: 1,
+    },
     modalTitle: {
-        fontSize: 24,
+        fontSize: 18,
         fontWeight: 'bold',
         flex: 1,
         textAlign: 'center',
         color: '#333',
     },
     label: {
-        fontSize: 18,
+        fontSize: 14,
         fontWeight: 'bold',
         marginBottom: 10,
         color: '#555',
@@ -809,6 +1029,9 @@ const styles = StyleSheet.create({
         padding: 15,
         borderRadius: 8,
         alignItems: 'center',
+    },
+    submitButtonDisabled: {
+        opacity: 0.65,
     },
     submitButtonText: {
         color: '#fff',
@@ -938,6 +1161,198 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#333',
     },
+    scrollContent: {
+        paddingBottom: 28,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingVertical: 8,
+        backgroundColor: '#FFFFFF',
+        borderBottomWidth: 1,
+        borderBottomColor: '#E9EAF0',
+    },
+    backButton: {
+        width: 40,
+        height: 40,
+        marginRight: 0,
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+    },
+    headerTitle: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#1F2937',
+    },
+    headerSpacer: {
+        width: 40,
+        height: 40,
+    },
+    filtersContainer: {
+        flexDirection: 'row',
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        paddingBottom: 6,
+        gap: 10,
+    },
+    filterItem: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        minHeight: 48,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    filterIcon: { marginRight: 8 },
+    filterChevron: { marginLeft: 'auto' },
+    filterText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#374151',
+    },
+    cardShadow: {
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+        elevation: 3,
+    },
+    kpiSection: {
+        padding: 16,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        marginHorizontal: 16,
+        marginTop: 8,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    summaryHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    summaryIcon: {
+        width: 46,
+        height: 46,
+        borderRadius: 14,
+        backgroundColor: '#F0F0FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+    },
+    summaryTitleWrap: { flex: 1 },
+    summaryTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937' },
+    summarySubtitle: { fontSize: 12, color: '#6B7280', marginTop: 3 },
+    summaryStatsCard: {
+        flexDirection: 'row',
+        alignItems: 'stretch',
+        justifyContent: 'space-between',
+    },
+    summaryStatWrap: { flex: 1, flexDirection: 'row', alignItems: 'stretch' },
+    summaryDivider: { width: 1, backgroundColor: '#E5E7EB', marginVertical: 4 },
+    kpiItem: { flex: 1, alignItems: 'center', paddingHorizontal: 2 },
+    statIconCircle: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 6,
+    },
+    kpiValue: { fontSize: 16, fontWeight: '800', marginTop: 3 },
+    kpiLabel: {
+        fontSize: 9,
+        lineHeight: 12,
+        textAlign: 'center',
+        color: '#6B7280',
+        fontWeight: '600',
+    },
+    chartSection: {
+        padding: 16,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        marginHorizontal: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    cardTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+    cardTitleIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        backgroundColor: '#F0F0FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    chartTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937' },
+    chartBarsRow: {
+        height: 162,
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'space-around',
+    },
+    barColumn: { flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end' },
+    barValue: { color: '#6C63FF', fontSize: 12, fontWeight: '700', marginBottom: 5 },
+    barTrack: {
+        height: 100,
+        width: 22,
+        borderRadius: 11,
+        backgroundColor: '#F0F0FF',
+        justifyContent: 'flex-end',
+        overflow: 'hidden',
+    },
+    barFill: { width: '100%', borderRadius: 11 },
+    barLabel: { marginTop: 8, fontSize: 10, lineHeight: 12, color: '#6B7280', textAlign: 'center' },
+    visitsStoresSection: {
+        flexDirection: 'row',
+        alignItems: 'stretch',
+        padding: 16,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        marginHorizontal: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    visitsSection: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+    storesSection: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 12 },
+    metricDivider: { width: 1, backgroundColor: '#E5E7EB', marginVertical: 2 },
+    visitStoreIcon: {
+        width: 42,
+        height: 42,
+        borderRadius: 14,
+        backgroundColor: '#F0F0FF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 9,
+    },
+    visitStoreTextWrap: { flex: 1 },
+    visitsValue: { fontSize: 18, fontWeight: '800', color: '#1F2937', marginTop: 2 },
+    storesValue: { fontSize: 18, fontWeight: '800', color: '#1F2937', marginTop: 2 },
+    visitsLabel: { fontSize: 11, fontWeight: '700', color: '#374151' },
+    storesLabel: { fontSize: 11, fontWeight: '700', color: '#374151' },
+    thisMonthLabel: { fontSize: 10, color: '#9CA3AF', marginTop: 1 },
+    regularizationButton: {
+        backgroundColor: '#6C63FF',
+        paddingVertical: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        marginHorizontal: 16,
+        marginTop: 4,
+    },
+    regularizationButtonIcon: { marginRight: 8 },
+    regularizationButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 });
 
-export default AttendanceScreen;    
+export default AttendanceScreen;

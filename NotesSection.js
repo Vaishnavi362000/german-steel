@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { format } from 'date-fns';
@@ -16,7 +17,7 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
   const fetchNotes = async () => {
     try {
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/notes/getByStore?id=${storeId}`,
+        `${API_BASE_URL}/notes/getByStore?id=${storeId}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -41,7 +42,7 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
       try {
         if (editingNoteId) {
           await axios.put(
-            `https://api.gajkesaristeels.in/notes/edit?id=${editingNoteId}`,
+            `${API_BASE_URL}/notes/edit?id=${editingNoteId}`,
             {
               content: newNote,
               ...(employeeId && { employeeId }), // Include employeeId only if available
@@ -55,7 +56,7 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
           );
         } else {
           await axios.post(
-            'https://api.gajkesaristeels.in/notes/create',
+            `${API_BASE_URL}/notes/create`,
             {
               content: newNote,
               ...(employeeId && { employeeId }), // Include employeeId only if available
@@ -95,7 +96,7 @@ export default function NotesSection({ storeId, visitId, authToken, employeeId }
   const handleDeleteNote = async (id) => {
     try {
       await axios.delete(
-        `https://api.gajkesaristeels.in/notes/delete?id=${id}`,
+        `${API_BASE_URL}/notes/delete?id=${id}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,

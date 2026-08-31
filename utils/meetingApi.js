@@ -1,8 +1,8 @@
 import axios from 'axios';
 import * as FileSystem from 'expo-file-system';
 
-const API_BASE_URL = 'http://ec2-3-88-111-83.compute-1.amazonaws.com:8081';
-const CUSTOMER_API_BASE_URL = 'https://api.gajkesaristeels.in';
+const API_BASE_URL = 'http://ec2-18-211-58-135.compute-1.amazonaws.com:8081';
+import { API_BASE_URL as CUSTOMER_API_BASE_URL } from '../config/api';
 const CREATE_MEETING_ENDPOINT = '/meeting/create';
 
 export const DEFAULT_MEETING_TYPES = [

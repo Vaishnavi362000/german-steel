@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import axios from 'axios';
@@ -17,7 +18,7 @@ export default function BrandsSection({ storeId, authToken }) {
   const fetchBrands = async () => {
     try {
       const response = await axios.get(
-        `https://api.gajkesaristeels.in/store/getById?id=${storeId}`,
+        `${API_BASE_URL}/store/getById?id=${storeId}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,
@@ -36,7 +37,7 @@ export default function BrandsSection({ storeId, authToken }) {
       const updatedBrands = [...brands, newBrand];
       try {
         await axios.put(
-          `https://api.gajkesaristeels.in/store/editProCons?id=${storeId}`,
+          `${API_BASE_URL}/store/editProCons?id=${storeId}`,
           updatedBrands,
           {
             headers: {
@@ -63,7 +64,7 @@ export default function BrandsSection({ storeId, authToken }) {
 
         try {
           await axios.put(
-            `https://api.gajkesaristeels.in/store/editProCons?id=${newBrand.id}`,
+            `${API_BASE_URL}/store/editProCons?id=${newBrand.id}`,
             newBrand,
             {
               headers: {
@@ -89,7 +90,7 @@ export default function BrandsSection({ storeId, authToken }) {
       const payload = [{ brandName }];
 
       await axios.delete(
-        `https://api.gajkesaristeels.in/store/deleteProCons?id=${storeId}`,
+        `${API_BASE_URL}/store/deleteProCons?id=${storeId}`,
         {
           headers: {
             Authorization: `Bearer ${authToken}`,

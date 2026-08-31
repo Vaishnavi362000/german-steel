@@ -9,7 +9,7 @@ const Splash = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>Welcome to Gajkesari</Text>
+      <Text style={styles.text}>Welcome to German Steel</Text>
     </View>
   );
 };

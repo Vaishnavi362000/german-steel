@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,7 +38,7 @@ const YesterdayStatsScreen = ({ route }) => {
         dayOfWeek === 1 ? today.clone().subtract(2, 'days') : today.clone().subtract(1, 'days');
       const targetDateStr = targetMoment.format('YYYY-MM-DD');
 
-      const apiUrl = `https://api.gajkesaristeels.in/employee/getYesterdayStats?date=${targetDateStr}&employeeId=${employeeId}`;
+      const apiUrl = `${API_BASE_URL}/employee/getYesterdayStats?date=${targetDateStr}&employeeId=${employeeId}`;
 
       console.log('=== YESTERDAY STATS API CALL ===');
       console.log('API URL:', apiUrl);

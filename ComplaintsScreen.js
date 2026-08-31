@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -27,7 +28,7 @@ const ComplaintsScreen = ({ route }) => {
       const startDate = moment(`${selectedYear}-${selectedMonth}`, 'YYYY-MMMM').startOf('month').format('YYYY-MM-DD');
       const endDate = moment(`${selectedYear}-${selectedMonth}`, 'YYYY-MMMM').endOf('month').format('YYYY-MM-DD');
 
-      const response = await axios.get(`https://api.gajkesaristeels.in/task/getByAssignedToAndDate?id=${employeeId}&start=${startDate}&end=${endDate}`, {
+      const response = await axios.get(`${API_BASE_URL}/task/getByAssignedToAndDate?id=${employeeId}&start=${startDate}&end=${endDate}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -55,40 +56,62 @@ const ComplaintsScreen = ({ route }) => {
     navigation.navigate('AddComplaintScreen', { authToken });
   };
 
-  const renderComplaint = (complaint) => (
-    <TouchableOpacity
-      key={complaint.id}
-      style={styles.complaintCard}
-      onPress={() => {
-        if (complaint.attachmentResponse && complaint.attachmentResponse.length > 0) {
-          // Handle image preview here
-          Alert.alert('Image Preview', 'Image preview functionality to be implemented');
-        }
-      }}
-    >
-      <View style={styles.cardHeader}>
-        <Text style={styles.storeName}>{complaint.storeName}</Text>
-        <View style={styles.statusBadge}>
-          <Text style={styles.statusText}>{complaint.status.toUpperCase()}</Text>
+  const renderComplaint = (complaint) => {
+    const attachmentCount = Array.isArray(complaint.attachmentResponse)
+      ? complaint.attachmentResponse.length
+      : 0;
+    const description = complaint.taskDescription || complaint.taskDesciption;
+
+    return (
+      <TouchableOpacity
+        key={complaint.id}
+        style={styles.complaintCard}
+        onPress={() => navigation.navigate('TaskDetails', { task: complaint, authToken })}
+        activeOpacity={0.86}
+      >
+        <View style={styles.cardHeader}>
+          <View style={styles.cardTitleWrap}>
+            <View style={styles.cardIcon}>
+              <Ionicons name="warning-outline" size={22} color="#6C63FF" />
+            </View>
+            <Text style={styles.storeName} numberOfLines={1}>{complaint.storeName || 'Customer / Store'}</Text>
+          </View>
+          {!!complaint.status && (
+            <View style={styles.statusBadge}>
+              <Text style={styles.statusText} numberOfLines={1}>{String(complaint.status).toUpperCase()}</Text>
+            </View>
+          )}
         </View>
-      </View>
-      <Text style={styles.taskType}>{complaint.taskType}</Text>
-      <Text style={styles.complaintText}>{complaint.taskTitle}</Text>
-      <Text style={styles.dueDate}>Due: {moment(complaint.dueDate).format('M/D/YYYY')}</Text>
-      {complaint.attachmentResponse && complaint.attachmentResponse.length > 0 && (
-        <View style={styles.imageIndicator}>
-          <Ionicons name="image-outline" size={20} color="#6C63FF" />
-          <Text style={styles.imageIndicatorText}>Image attached</Text>
+
+        <View style={styles.cardBodyRow}>
+          <View style={styles.cardMainColumn}>
+            <Text style={styles.taskType}>COMPLAINT</Text>
+            <Text style={styles.complaintTitle} numberOfLines={1}>{complaint.taskTitle || 'Untitled'}</Text>
+            {!!description && <Text style={styles.complaintDescription} numberOfLines={2}>{description}</Text>}
+            <View style={styles.dashedDivider} />
+            <Text style={styles.fieldLabel}>CUSTOMER / STORE</Text>
+            <Text style={styles.customerName} numberOfLines={1}>{complaint.storeName || 'N/A'}</Text>
+          </View>
+
+          <View style={[styles.cardSideColumn, attachmentCount === 0 && styles.cardSideColumnEmpty]}>
+            {attachmentCount > 0 && (
+              <View style={styles.imageCountBadge}>
+                <Ionicons name="image-outline" size={17} color="#6C63FF" />
+                <Text style={styles.imageCountText} numberOfLines={1}>{attachmentCount} images</Text>
+              </View>
+            )}
+            <Ionicons name="chevron-forward" size={24} color="#6B7280" />
+          </View>
         </View>
-      )}
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={24} color="#333" />
+          <Ionicons name="arrow-back" size={24} color="#6C63FF" />
         </TouchableOpacity>
         <View style={styles.titleContainer}>
           <Text style={styles.headerTitle}>Complaints</Text>
@@ -121,12 +144,16 @@ const ComplaintsScreen = ({ route }) => {
             {renderComplaint(complaint)}
           </View>
         ))}
+        {complaints.length === 0 && (
+          <Text style={styles.emptyListText}>No complaints available for this period.</Text>
+        )}
       </ScrollView>
 
       <BottomSheetn
         isVisible={isMonthPickerVisible}
         onClose={() => setIsMonthPickerVisible(false)}
         data={moment.months()}
+        selectedValue={selectedMonth}
         onSelect={(month) => {
           setSelectedMonth(month);
           setIsMonthPickerVisible(false);
@@ -136,7 +163,8 @@ const ComplaintsScreen = ({ route }) => {
       <BottomSheetn
         isVisible={isYearPickerVisible}
         onClose={() => setIsYearPickerVisible(false)}
-        data={['2023', '2024', '2025']}
+        data={['2023', '2024', '2025', '2026']}
+        selectedValue={selectedYear}
         onSelect={(year) => {
           setSelectedYear(year);
           setIsYearPickerVisible(false);
@@ -314,11 +342,221 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6C63FF',
   },
+  cardTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  cardBodyRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  cardMainColumn: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 14,
+  },
+  cardSideColumn: {
+    width: 104,
+    borderLeftWidth: 1,
+    borderLeftColor: '#E5E7EB',
+    paddingLeft: 12,
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  cardSideColumnEmpty: {
+    justifyContent: 'center',
+  },
+  complaintTitle: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 6,
+  },
+  complaintDescription: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  dashedDivider: {
+    borderTopWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#E5E7EB',
+    marginVertical: 12,
+  },
+  fieldLabel: {
+    color: '#666',
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  customerName: {
+    color: '#1F2937',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  imageCountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    maxWidth: 96,
+  },
+  imageCountText: {
+    color: '#6C63FF',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+    marginLeft: 5,
+    flexShrink: 1,
+  },
   emptyListText: {
     textAlign: 'center',
-    marginTop: 20,
-    fontSize: 16,
+    marginTop: 24,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    marginRight: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  titleContainer: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  filterContainer: {
+    flexDirection: 'row',
+  },
+  filterButton: {
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    marginLeft: 6,
+  },
+  filterButtonText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  scrollContainer: {
+    flex: 1,
+    paddingHorizontal: 0,
+  },
+  dateSection: {
+    padding: 16,
+  },
+  dateText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#6C63FF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    marginHorizontal: 16,
+    marginVertical: 12,
+  },
+  addButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  complaintCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 14,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 16,
+  },
+  storeName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  statusBadge: {
+    backgroundColor: '#FF9800',
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    maxWidth: 112,
+  },
+  statusText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+  },
+  taskType: {
     color: '#666',
+    marginBottom: 6,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });
 

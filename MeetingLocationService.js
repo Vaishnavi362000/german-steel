@@ -3,12 +3,12 @@ import { getMobileActionLocation } from './MobileLocationService';
 
 const MEETING_LOCATION_OPTIONS = {
   requirePrecise: false,
-  timeoutMs: 15000,
-  highAccuracyTimeoutMs: 10000,
-  cacheMaxAgeMs: 120000,
-  cacheRequiredAccuracy: 200,
-  balancedRequiredAccuracy: 200,
-  highRequiredAccuracy: 120,
+  timeoutMs: 60000,
+  highAccuracyTimeoutMs: 30000,
+  cacheMaxAgeMs: 300000,
+  cacheRequiredAccuracy: 1000,
+  balancedRequiredAccuracy: 1000,
+  highRequiredAccuracy: 500,
 };
 
 const REVERSE_GEOCODE_TIMEOUT_MS = 7000;

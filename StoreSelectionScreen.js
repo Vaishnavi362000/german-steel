@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TextInput,
@@ -23,7 +24,7 @@ const StoreSelectionScreen = ({ route }) => {
       setIsLoading(true);
       const employeeId = await AsyncStorage.getItem('employeeId');
       const response = await axios.get(
-        'https://api.gajkesaristeels.in/store/getByEmployeeWithSort',
+        `${API_BASE_URL}/store/getByEmployeeWithSort`,
         {
           params: {
             id: employeeId,

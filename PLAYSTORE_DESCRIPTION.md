@@ -1,11 +1,11 @@
-# Gajkesari Sales - Google Play Store Description
+# German Steel Sales - Google Play Store Description
 
 ## Short Description (80 characters max)
 Field force management app for sales teams - track visits, customers, expenses & attendance
 
 ## Full Description
 
-**Gajkesari Sales** is a comprehensive field force management application designed to empower sales teams and field officers with powerful tools to manage their daily operations efficiently. Streamline your sales activities, track customer interactions, manage expenses, and monitor attendance - all from your mobile device.
+**German Steel Sales** is a comprehensive field force management application designed to empower sales teams and field officers with powerful tools to manage their daily operations efficiently. Streamline your sales activities, track customer interactions, manage expenses, and monitor attendance - all from your mobile device.
 
 ### 🎯 **Key Features:**
 
@@ -71,7 +71,7 @@ Field force management app for sales teams - track visits, customers, expenses &
 - Attach images to tasks and requirements
 - View image galleries
 
-### ✨ **Why Choose Gajkesari Sales?**
+### ✨ **Why Choose German Steel Sales?**
 
 ✅ **User-Friendly Interface** - Intuitive design for easy navigation
 ✅ **Offline Capability** - Work seamlessly even with limited connectivity
@@ -92,7 +92,7 @@ Field force management app for sales teams - track visits, customers, expenses &
 - GPS/Location services enabled
 - Internet connection (for data sync)
 
-Transform your field sales operations with Gajkesari Sales. Download now and experience the power of mobile field force management!
+Transform your field sales operations with German Steel Sales. Download now and experience the power of mobile field force management!
 
 ---
 

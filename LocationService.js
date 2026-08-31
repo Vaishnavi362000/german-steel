@@ -1,6 +1,10 @@
+import { API_BASE_URL } from './config/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { getVisitActionLocation } from './MobileLocationService';
+
+const LOCATION_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+let lastLocationFailureAt = 0;
 
 class LocationService {
   static async isWithinWorkingHours() {
@@ -28,7 +32,7 @@ class LocationService {
       }
 
       const response = await axios.put(
-        `https://api.gajkesaristeels.in/employee/updateLiveLocation?id=${employeeId}&latitude=${location.coords.latitude}&longitude=${location.coords.longitude}`,
+        `${API_BASE_URL}/employee/updateLiveLocation?id=${employeeId}&latitude=${location.coords.latitude}&longitude=${location.coords.longitude}`,
         {},
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -54,16 +58,26 @@ class LocationService {
   }
 
   static async getCurrentLocation() {
+    if (Date.now() - lastLocationFailureAt < LOCATION_RETRY_COOLDOWN_MS) {
+      return null;
+    }
+
     try {
-      return await getVisitActionLocation({
+      const location = await getVisitActionLocation({
         requirePrecise: false,
-        timeoutMs: 12000,
+        timeoutMs: 60000,
         cacheMaxAgeMs: 300000,
-        cacheRequiredAccuracy: 200,
-        balancedRequiredAccuracy: 250,
+        cacheRequiredAccuracy: 1000,
+        balancedRequiredAccuracy: 1000,
       });
+      lastLocationFailureAt = 0;
+      return location;
     } catch (error) {
-      console.warn('Live location fetch skipped:', error?.message || error);
+      lastLocationFailureAt = Date.now();
+      console.warn('Live location fetch skipped:', {
+        code: error?.code || 'location_unavailable',
+        message: error?.message || String(error),
+      });
       return null;
     }
   }

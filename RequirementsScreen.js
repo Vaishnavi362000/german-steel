@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
@@ -27,7 +28,7 @@ const RequirementsScreen = ({ route }) => {
       const startDate = moment(`${selectedYear}-${selectedMonth}`, 'YYYY-MMMM').startOf('month').format('YYYY-MM-DD');
       const endDate = moment(`${selectedYear}-${selectedMonth}`, 'YYYY-MMMM').endOf('month').format('YYYY-MM-DD');
 
-      const response = await axios.get(`https://api.gajkesaristeels.in/task/getByAssignedToAndDate?id=${employeeId}&start=${startDate}&end=${endDate}`, {
+      const response = await axios.get(`${API_BASE_URL}/task/getByAssignedToAndDate?id=${employeeId}&start=${startDate}&end=${endDate}`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -96,34 +97,72 @@ const RequirementsScreen = ({ route }) => {
     navigation.navigate('AddRequirementScreen', { authToken });
   };
 
-  const renderRequirement = (requirement) => (
-    <TouchableOpacity
-      key={requirement.id}
-      style={styles.requirementCard}
-      onPress={() => {
-        navigation.navigate('RequirementDetailsScreen', { requirement });
-      }}
-    >
-      <View style={styles.cardHeader}>
-        <Text style={styles.storeName}>{requirement.storeName}</Text>
-        <View style={styles.statusBadge}>
-          <Text style={styles.statusText}>{requirement.status.toUpperCase()}</Text>
+  const renderRequirement = (requirement) => {
+    const attachmentCount = Array.isArray(requirement.attachmentResponse)
+      ? requirement.attachmentResponse.length
+      : 0;
+    const description = requirement.taskDescription || requirement.taskDesciption;
+
+    return (
+      <TouchableOpacity
+        key={requirement.id}
+        style={styles.requirementCard}
+        onPress={() => navigation.navigate('TaskDetails', { task: requirement, authToken })}
+        activeOpacity={0.86}
+      >
+        <View style={styles.cardHeader}>
+          <View style={styles.cardTitleWrap}>
+            <View style={styles.cardIcon}>
+              <Ionicons name="clipboard-outline" size={22} color="#6C63FF" />
+            </View>
+            <Text style={styles.storeName} numberOfLines={1}>
+              {requirement.storeName || 'Customer / Store'}
+            </Text>
+          </View>
+          {!!requirement.status && (
+            <View style={styles.statusBadge}>
+              <Text style={styles.statusText} numberOfLines={1}>
+                {String(requirement.status).toUpperCase()}
+              </Text>
+            </View>
+          )}
         </View>
-      </View>
-      <Text style={styles.taskType}>{requirement.taskType}</Text>
-      <Text style={styles.requirementText}>{requirement.taskTitle}</Text>
-      {(requirement.taskDesciption || requirement.taskDesciption) && (
-        <Text style={styles.descriptionText}>{requirement.taskDesciption || requirement.taskDesciption}</Text>
-      )}
-      <Text style={styles.dueDate}>Due: {moment(requirement.dueDate).format('M/D/YYYY')}</Text>
-    </TouchableOpacity>
-  );
+
+        <View style={styles.cardBodyRow}>
+          <View style={styles.cardMainColumn}>
+            <Text style={styles.taskType}>REQUIREMENT</Text>
+            <Text style={styles.requirementTitle} numberOfLines={1}>
+              {requirement.taskTitle || 'Untitled'}
+            </Text>
+            {!!description && (
+              <Text style={styles.requirementDescription} numberOfLines={2}>{description}</Text>
+            )}
+            <View style={styles.dashedDivider} />
+            <Text style={styles.fieldLabel}>CUSTOMER / STORE</Text>
+            <Text style={styles.customerName} numberOfLines={1}>
+              {requirement.storeName || 'N/A'}
+            </Text>
+          </View>
+
+          <View style={[styles.cardSideColumn, attachmentCount === 0 && styles.cardSideColumnEmpty]}>
+            {attachmentCount > 0 && (
+              <View style={styles.imageCountBadge}>
+                <Ionicons name="image-outline" size={17} color="#6C63FF" />
+                <Text style={styles.imageCountText} numberOfLines={1}>{attachmentCount} images</Text>
+              </View>
+            )}
+            <Ionicons name="chevron-forward" size={24} color="#6B7280" />
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={24} color="#333" />
+          <Ionicons name="arrow-back" size={24} color="#6C63FF" />
         </TouchableOpacity>
         <View style={styles.titleContainer}>
           <Text style={styles.headerTitle}>Requirements</Text>
@@ -173,12 +212,16 @@ const RequirementsScreen = ({ route }) => {
             );
           });
         })()}
+        {requirements.length === 0 && (
+          <Text style={styles.emptyListText}>No requirements available for this period.</Text>
+        )}
       </ScrollView>
 
       <BottomSheetn
         isVisible={isMonthPickerVisible}
         onClose={() => setIsMonthPickerVisible(false)}
         data={moment.months()}
+        selectedValue={selectedMonth}
         onSelect={(month) => {
           setSelectedMonth(month);
           setIsMonthPickerVisible(false);
@@ -188,7 +231,8 @@ const RequirementsScreen = ({ route }) => {
       <BottomSheetn
         isVisible={isYearPickerVisible}
         onClose={() => setIsYearPickerVisible(false)}
-        data={['2023', '2024', '2025']}
+        data={['2023', '2024', '2025', '2026']}
+        selectedValue={selectedYear}
         onSelect={(year) => {
           setSelectedYear(year);
           setIsYearPickerVisible(false);
@@ -222,7 +266,8 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
+    lineHeight: 23,
+    fontWeight: '700',
   },
   filterContainer: {
     flexDirection: 'row',
@@ -235,7 +280,9 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   filterButtonText: {
-    fontSize: 14,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
     color: '#333',
   },
   addButton: {
@@ -251,74 +298,169 @@ const styles = StyleSheet.create({
   },
   addButtonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '700',
     marginLeft: 8,
   },
   scrollContainer: {
     flex: 1,
   },
   dateSection: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
+    padding: 16,
   },
   dateText: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
     color: '#1F2937',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   requirementCard: {
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 8,
-    marginBottom: 8,
+    borderRadius: 14,
     marginHorizontal: 16,
+    marginBottom: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    gap: 10,
+    marginBottom: 16,
   },
   storeName: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    flex: 1,
+    minWidth: 0,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: '#1F2937',
   },
   statusBadge: {
     backgroundColor: '#FF9800',
-    borderRadius: 12,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    maxWidth: 112,
   },
   statusText: {
     color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
   },
   taskType: {
     color: '#666',
-    marginBottom: 4,
-  },
-  requirementText: {
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  descriptionText: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 4,
-    marginBottom: 8,
+    marginBottom: 6,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   dueDate: {
     color: '#666',
     fontSize: 12,
+  },
+  cardTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  cardBodyRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  cardMainColumn: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 14,
+  },
+  cardSideColumn: {
+    width: 104,
+    borderLeftWidth: 1,
+    borderLeftColor: '#E5E7EB',
+    paddingLeft: 12,
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  cardSideColumnEmpty: {
+    justifyContent: 'center',
+  },
+  requirementTitle: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 6,
+  },
+  requirementDescription: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  dashedDivider: {
+    borderTopWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#E5E7EB',
+    marginVertical: 12,
+  },
+  fieldLabel: {
+    color: '#666',
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  customerName: {
+    color: '#1F2937',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  imageCountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    maxWidth: 96,
+  },
+  imageCountText: {
+    color: '#6C63FF',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+    marginLeft: 5,
+    flexShrink: 1,
+  },
+  emptyListText: {
+    textAlign: 'center',
+    marginTop: 24,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
   },
 });
 

@@ -1,3 +1,4 @@
+import { API_BASE_URL } from './config/api';
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
@@ -18,7 +19,7 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
 
     const fetchMonthlySale = async () => {
         try {
-            const response = await axios.get(`https://api.gajkesaristeels.in/monthly-sale/getByVisit?visitId=${visitId}`, {
+            const response = await axios.get(`${API_BASE_URL}/monthly-sale/getByVisit?visitId=${visitId}`, {
                 headers: {
                     Authorization: `Bearer ${authToken}`,
                 },
@@ -44,7 +45,7 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
 
         try {
             setIsSaving(true);
-            await axios.put(`https://api.gajkesaristeels.in/visit/editMonthlySale?visitId=${visitId}&monthlySale=${monthlySale}`, null, {
+            await axios.put(`${API_BASE_URL}/visit/editMonthlySale?visitId=${visitId}&monthlySale=${monthlySale}`, null, {
                 headers: {
                     Authorization: `Bearer ${authToken}`,
                 },
