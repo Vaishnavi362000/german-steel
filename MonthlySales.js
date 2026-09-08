@@ -26,7 +26,6 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
             });
             const newMonthlySale = response.data.newMonthlySale?.toString() || '';
             setMonthlySale(newMonthlySale);
-            onSaleUpdated(parseFloat(newMonthlySale) || 0);
         } catch (error) {
             console.error('Error fetching monthly sale:', error);
             Alert.alert('Error', 'Failed to fetch monthly sale. Please try again.');
@@ -62,7 +61,6 @@ const MonthlySales = ({ visitId, authToken, initialMonthlySale, onSaleUpdated, o
 
     const handleMonthlySaleChange = (value) => {
         setMonthlySale(value);
-        onSaleUpdated(parseFloat(value) || 0);
     };
 
     return (

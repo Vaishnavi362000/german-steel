@@ -10,6 +10,7 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
   const [description, setDescription] = useState('');
   const [images, setImages] = useState([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [isOpeningCamera, setIsOpeningCamera] = useState(false);
 
   useEffect(() => {
     fetchComplaints();
@@ -134,33 +135,46 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
   };
 
   const takeImage = async () => {
+    if (isOpeningCamera) {
+      return;
+    }
+
     const remainingSlots = 5 - images.length;
     if (remainingSlots <= 0) {
       Alert.alert('Limit Reached', 'You can only add up to 5 images.');
       return;
     }
 
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission denied', 'Camera permission is required to take photos.');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 1,
-    });
-
-    if (!result.canceled && result.assets) {
-      const newImages = result.assets.map(asset => asset.uri);
-      const totalImages = images.length + newImages.length;
-      if (totalImages > 5) {
-        Alert.alert('Limit Reached', `You can only add up to 5 images.`);
-        return;
-      } else {
-        setImages([...images, ...newImages]);
+    setIsOpeningCamera(true);
+    try {
+      // Checking is immediate when permission was previously granted. Request
+      // access only on the first use instead of doing a permission request on
+      // every tap before opening the native camera.
+      let permission = await ImagePicker.getCameraPermissionsAsync();
+      if (!permission.granted) {
+        permission = await ImagePicker.requestCameraPermissionsAsync();
       }
+
+      if (!permission.granted) {
+        Alert.alert('Permission denied', 'Camera permission is required to take photos.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets) {
+        const newImages = result.assets.map(asset => asset.uri);
+        setImages(currentImages => [...currentImages, ...newImages].slice(0, 5));
+      }
+    } catch (error) {
+      console.error('Error opening complaint camera:', error);
+      Alert.alert('Camera unavailable', 'Unable to open the camera. Please try again.');
+    } finally {
+      setIsOpeningCamera(false);
     }
   };
 
@@ -208,9 +222,13 @@ const Complaints = ({ visitId, authToken, onComplaintAdded, readOnly }) => {
                 {images.length < 5 ? 'Add Image' : 'Max Images Added'}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.imageButton} onPress={takeImage}>
+            <TouchableOpacity
+              style={[styles.imageButton, isOpeningCamera && styles.imageButtonDisabled]}
+              onPress={takeImage}
+              disabled={isOpeningCamera || images.length >= 5}
+            >
               <Text style={styles.imageButtonText}>
-                {images.length < 5 ? 'Take Image' : 'Max Images Added'}
+                {isOpeningCamera ? 'Opening camera…' : images.length < 5 ? 'Take Image' : 'Max Images Added'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -285,6 +303,9 @@ const styles = StyleSheet.create({
   },
   imageButtonText: {
     color: '#4A90E2',
+  },
+  imageButtonDisabled: {
+    opacity: 0.65,
   },
   imagePreviewContainer: {
     flexDirection: 'row',

@@ -256,6 +256,9 @@ const VisitScreen = ({ route }) => {
           fetchIntentLevel(),
           fetchSitesCount(visitData.storeId),
         ]);
+        // Use the legacy monthly-sales endpoint as a supplemental refresh.
+        // The visit response remains authoritative when this endpoint is empty.
+        await fetchMonthlySales();
       }
     } catch (error) {
       console.error('Error fetching visit details:', error);
@@ -383,10 +386,28 @@ const VisitScreen = ({ route }) => {
           Authorization: `Bearer ${authToken}`,
         },
       });
-      setMonthlySale(response.data.newMonthlySale?.toString() || '');
+      const rawMonthlySale = response.data?.newMonthlySale ?? response.data?.monthlySale ?? 0;
+      const parsedMonthlySale = Number(rawMonthlySale);
+      const normalizedMonthlySale = Number.isFinite(parsedMonthlySale) && parsedMonthlySale > 0
+        ? parsedMonthlySale
+        : 0;
+
+      // `visit/getById` already includes `monthlySale`. Some deployments of
+      // the legacy monthly-sales endpoint return an empty value for the same
+      // visit, so never let that response erase a valid saved sale.
+      if (normalizedMonthlySale > 0) {
+        setMonthlySale(normalizedMonthlySale.toString());
+        setVisitData(prevData => ({
+          ...prevData,
+          monthlySales: normalizedMonthlySale,
+        }));
+        setVisit(prevVisit => prevVisit ? ({
+          ...prevVisit,
+          monthlySale: normalizedMonthlySale,
+        }) : prevVisit);
+      }
     } catch (error) {
       console.error('Error fetching monthly sale:', error);
-      Alert.alert('Error', 'Failed to fetch monthly sale. Please try again.');
     }
   };
 
@@ -505,11 +526,16 @@ const VisitScreen = ({ route }) => {
   };
 
   const handleSaleUpdated = (newSale) => {
+    const parsedMonthlySale = Number(newSale);
+    const normalizedMonthlySale = Number.isFinite(parsedMonthlySale) && parsedMonthlySale > 0
+      ? parsedMonthlySale
+      : 0;
+
     setVisitData(prevData => ({
       ...prevData,
-      monthlySales: newSale
+      monthlySales: normalizedMonthlySale
     }));
-    setMonthlySale(newSale.toString());
+    setMonthlySale(normalizedMonthlySale ? normalizedMonthlySale.toString() : '');
   };
 
   const handleBrandAdded = (brands) => {
@@ -821,7 +847,7 @@ const VisitScreen = ({ route }) => {
         'Cannot Checkout',
         isGiftingVisit
           ? 'Please add the gift image before completing this gifting visit.'
-          : 'Please ensure you have added brands, set intent level, and entered monthly sales.'
+          : getCheckoutRequirementsText() || 'Please complete the required visit details before checking out.'
       );
       return;
     }
@@ -1194,9 +1220,10 @@ const VisitScreen = ({ route }) => {
               visitId,
               storeId: visit.storeId,
               authToken,
+              initialMonthlySale: visitData.monthlySales,
               readOnly: false
             })}
-            badge={visitData.monthlySales ? 'âœ“' : null}
+            badge={Number(visitData.monthlySales) > 0 ? '✓' : null}
           />,
           <ActionButton
             key="requirements"
